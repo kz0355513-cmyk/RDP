@@ -50,18 +50,20 @@ jobs:
               exit 1
           }
  
-      - name: Install Tailscale 🔧
+      - name: Install Tailscale 🔧 (Final Attempt with Versioned Link)
         run: |
-          # **تم التعديل لاستخدام Start-BitsTransfer**
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-windows-amd64.msi" 
+          # **التعديل الحاسم:** استخدام رابط محدد بالإصدار (1.90.6 كمثال على الأحدث)
+          $tsVersion = "1.90.6" # تأكد من استخدام أحدث إصدار متاح لزيادة الموثوقية
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          Write-Host "Downloading Tailscale from: $tsUrl using Start-BitsTransfer..."
+          Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
           
+          # استخدام Start-BitsTransfer
           Start-BitsTransfer -Source $tsUrl -Destination $installerPath
           
           if (-not (Test-Path $installerPath)) {
-              Write-Error "Failed to download Tailscale installer (BitsTransfer failed)."
+              Write-Error "Failed to download Tailscale installer. Check the version number in the link."
               exit 1
           }
           
