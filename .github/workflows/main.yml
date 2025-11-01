@@ -1,79 +1,79 @@
-name: SSH - Robust Linux Runner (Official Action)
+name: RDP - Powerful Max Runner (FIXED)
 
 on:
-  # This allows you to manually run the workflow for SSH access
   workflow_dispatch:
 
 jobs:
-  secure-ssh:
-    # Use the Ubuntu runner
-    runs-on: ubuntu-latest
-    # Set the session duration to the maximum limit (6 hours)
+  secure-rdp:
+    runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-      - name: Configure SSH and Generate Credentials 🔑
-        # This part remains the same to set up the SSH user and service
+      - name: Configure RDP Settings 🔧
         run: |
-          export RDP_USER="gh-user"
-          # Generate a 16-character secure password
-          password=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*()_+{}[]|:<>?~' < /dev/urandom | head -c 16)
+          Write-Host "Configuring RDP and Firewall..."
           
-          # Create user, set password, and grant sudo rights
-          sudo useradd -m -s /bin/bash $RDP_USER
-          echo "$RDP_USER:$password" | sudo chpasswd
-          sudo usermod -aG sudo $RDP_USER
+          # Enable RDP and disable NLA (same as original)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+
+          # Open Port 3389 in the firewall (same as original)
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 profile=any
+          Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
-          # Install and configure SSH server
-          sudo apt-get update
-          sudo apt-get install -y openssh-server
-          sudo systemctl start ssh
+          # Restart RDP service (same as original)
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Secure Password
+        run: |
+          # --- (User creation logic remains the same for stability) ---
+          Add-Type -AssemblyName System.Security
+          $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          # Enable password authentication (required since we generate a password)
-          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo systemctl restart ssh
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          # Export credentials as environment variables
-          echo "RDP_USER=$RDP_USER" >> $GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $GITHUB_ENV
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
           
-          echo "SSH User setup complete."
+          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
       - name: Establish Tailscale Connection (Official Action) 🌐
-        # This step handles installation and connection automatically
+        # REPLACED MANUAL INSTALL with the official action for reliability
         uses: tailscale/github-action@v2
         with:
-          # Use your stored secret here
           authkey: ${{ secrets.TAILSCALE_AUTH_KEY }} 
-          # Assign a hostname to easily identify the runner in your Tailscale admin console
-          hostname: gh-linux-runner-${{ github.run_id }}
-          # Set up userspace networking for ephemeral environments
-          args: "--tun=userspace-networking"
+          hostname: gh-windows-rdp-${{ github.run_id }}
           
       - name: Get Tailscale IP Address
         id: get_ip
         run: |
-          # Use the 'tailscale ip' command to retrieve the assigned IP
-          ts_ip=$(/usr/bin/tailscale ip -4)
-          if [ -z "$ts_ip" ]; then
-            echo "Tailscale IP not assigned. Exiting."
-            exit 1
-          fi
-          echo "TAILSCALE_IP=$ts_ip" >> $GITHUB_ENV
-
+          # Get the IP assigned by Tailscale
+          $tsIP = ( & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 )
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          
       - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
-          echo -e "\n=== SSH ACCESS INFO ==="
-          echo "Runner is ACTIVE. You have up to 6 hours of access."
-          echo "Address: $TAILSCALE_IP"
-          echo "Username: $RDP_USER"
-          echo "Password: $RDP_PASSWORD"
-          echo "Connect with: ssh $RDP_USER@$TAILSCALE_IP"
-          echo "======================\n"
+          Write-Host "`n=== RDP ACCESS INFO ==="
+          Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "==================`n"
           
-          # Keep the workflow job running until the timeout is reached (6 hours)
-          while true; do
-            echo "[$(date)] Runner Active - Use 'Cancel workflow' to terminate"
-            sleep 300 # Sleep for 5 minutes
-          done
+          # Keeps the workflow running for the full duration
+          while ($true) {
+              Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
+          }
