@@ -23,26 +23,24 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 1 -Force
 
-          # 3. فتح المنفذ (3389) بقاعدة مخصصة وتفعيل القاعدة القياسية
+          # 3. **التعديل النهائي:** فتح المنفذ 3389 عبر جميع ملفات تعريف الشبكة (profile=any)
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
+            dir=in action=allow protocol=TCP localport=3389 profile=any
+            
+          # 4. تفعيل قواعد جدار الحماية RDP القياسية (للتأكيد)
           Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
-          # 4. **التعديل الجديد: إعادة التشغيل والتحقق من حالة الخدمة**
+          # 5. إعادة التشغيل والتحقق من حالة الخدمة
           Write-Host "Restarting TermService..."
           Restart-Service -Name TermService -Force
           
-          # الانتظار حتى تكون الخدمة تعمل
-          $maxWait = 30 # الانتظار بحد أقصى 30 ثانية
+          $maxWait = 30 
           $timeout = (Get-Date).AddSeconds($maxWait)
           Write-Host "Waiting up to $maxWait seconds for TermService to start."
           
           while ((Get-Service -Name TermService).Status -ne 'Running') {
-              if ((Get-Date) -gt $timeout) {
-                  Write-Error "TermService failed to start within the timeout period."
-                  exit 1
-              }
+              if ((Get-Date) -gt $timeout) { Write-Error "TermService failed to start within the timeout period."; exit 1 }
               Start-Sleep -Seconds 2
           }
           Write-Host "TermService is now Running."
