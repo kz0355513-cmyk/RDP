@@ -1,11 +1,12 @@
 name: RDP - Powerful Max Runner (Final Working Version)
 
 on:
+  # This enables manual workflow triggering
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    # Must use Windows for RDP
+    # Use the Windows runner for RDP
     runs-on: windows-latest
     # Set the session duration to the maximum limit (6 hours)
     timeout-minutes: 360
@@ -26,6 +27,7 @@ jobs:
           Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
           # Restart RDP service
+          Write-Host "Restarting TermService..."
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -49,17 +51,18 @@ jobs:
           
           if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
-      - name: Install Tailscale Manually 📥
-        # This replaces the brittle old download link with a generic, stable link
+      - name: Install Tailscale Manually 📥 (Using Curl)
         run: |
+          # Use the stable link for the latest MSI
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          Write-Host "Downloading latest Tailscale installer..."
-          # Use Invoke-WebRequest as it's often more reliable than Start-BitsTransfer on runners
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Write-Host "Downloading latest Tailscale installer using curl..."
           
-          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
+          # *** FIX: Use curl.exe for reliable downloading ***
+          curl.exe -L $tsUrl -o $installerPath
+          
+          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer with curl. Check URL/Network."; exit 1 }
           
           Write-Host "Installation starting..."
           # Install silently
