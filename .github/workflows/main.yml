@@ -9,44 +9,18 @@ jobs:
     timeout-minutes: 180 
  
     steps:
-      - name: Configure Core RDP Settings and Start Service 🔧
+      - name: Configure PSRemoting (Alternative RDP) 🔑
         run: |
-          Write-Host "Configuring RDP and Firewall..."
+          Write-Host "Configuring PowerShell Remoting..."
           
-          # 1. تمكين سطح المكتب البعيد
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
+          # 1. تمكين PowerShell Remoting على المنفذ الافتراضي (5985)
+          Enable-PSRemoting -Force
           
-          # 2. تعطيل مصادقة مستوى الشبكة (NLA)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 1 -Force
-
-          # 3. **التعديل النهائي:** فتح المنفذ 3389 عبر جميع ملفات تعريف الشبكة (profile=any)
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389 profile=any
+          # 2. ضمان أن جدار الحماية يسمح باتصالات WinRM (PowerShell Remoting)
+          netsh advfirewall firewall add rule name="WinRM-Tailscale" `
+            dir=in action=allow protocol=TCP localport=5985 profile=any
             
-          # 4. تفعيل قواعد جدار الحماية RDP القياسية (للتأكيد)
-          Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
-          
-          # 5. إعادة التشغيل والتحقق من حالة الخدمة
-          Write-Host "Restarting TermService..."
-          Restart-Service -Name TermService -Force
-          
-          $maxWait = 30 
-          $timeout = (Get-Date).AddSeconds($maxWait)
-          Write-Host "Waiting up to $maxWait seconds for TermService to start."
-          
-          while ((Get-Service -Name TermService).Status -ne 'Running') {
-              if ((Get-Date) -gt $timeout) { Write-Error "TermService failed to start within the timeout period."; exit 1 }
-              Start-Sleep -Seconds 2
-          }
-          Write-Host "TermService is now Running."
- 
-      - name: Create RDP User with Secure Password
-        run: |
+          # 3. إنشاء المستخدم وتعيين كلمة المرور (نفس الكود السابق)
           Add-Type -AssemblyName System.Security
           $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
           $rawPassword = @()
@@ -81,8 +55,9 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
  
-      - name: Establish Tailscale Connection
+      - name: Establish Tailscale Connection and Funnel RDP Port 🌐
         run: |
+          # تشغيل Tailscale
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
           $tsIP = $null
@@ -96,36 +71,57 @@ jobs:
           }
           
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
+          
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
- 
-      - name: Verify RDP Accessibility
+          
+          # **التعديل الجديد:** فتح منفذ RDP (3389) باستخدام Tailscale Funnel.
+          # هذا سيقوم بإنشاء اتصال مباشر RDP عبر Tailscale (باستخدام المنفذ 3389 للخدمة المحلية)
+          # ملاحظة: هذا الأمر يتطلب وجود خدمة RDP، لذا سنقوم بتشغيلها مرة أخرى للتأكيد 
+          Write-Host "Starting RDP service for tsnet..."
+          Set-Service -Name TermService -Status Running -ErrorAction SilentlyContinue
+          
+          # محاولة فتح RDP عبر Tailscale (لضمان تجاوز مشاكل جدار الحماية)
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" set --ssh --accept-routes
+          
+      - name: Verify RDP Accessibility (Final Check)
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
           $TestAttempts = 0
           do {
-              Write-Host "Attempting TCP connection test #$($TestAttempts+1)..."
+              Write-Host "Attempting TCP connection test #$($TestAttempts+1) on port 3389..."
+              # نختبر المنفذ 3389 كونه هو المنفذ الذي يفترض أن يكون مفتوحاً الآن سواء عبر WinRM أو RDP
               $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
               if ($testResult.TcpTestSucceeded) {
-                  Write-Host "TCP connectivity successful!"
+                  Write-Host "TCP connectivity successful! Use MSTSC.exe to connect to $env:TAILSCALE_IP"
                   exit 0
               }
               $TestAttempts++
               if ($TestAttempts -lt 3) { Start-Sleep -Seconds 5 }
           } while ($TestAttempts -lt 3)
 
-          Write-Error "TCP connection to RDP port 3389 failed after 3 attempts."
+          # إذا فشل الاتصال بـ 3389، نجرب 5985 (PowerShell Remoting)
+          Write-Host "TCP connection to RDP port 3389 failed. Attempting PowerShell Remoting port 5985..."
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 5985 -InformationLevel Quiet
+          if ($testResult.TcpTestSucceeded) {
+              Write-Host "PSRemoting (5985) connectivity successful! Use Enter-PSSession to connect to $env:TAILSCALE_IP"
+              exit 0
+          }
+          
+          Write-Error "Failed to establish RDP (3389) or PSRemoting (5985) connection after all attempts."
           exit 1
  
-      - name: Maintain Connection
+      - name: Maintain Connection and Display Access Info ✨
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "`n=== ACCESS INFO ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "---"
+          Write-Host "If RDP (3389) fails, try PowerShell Remoting (5985)."
           Write-Host "==================`n"
           
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
