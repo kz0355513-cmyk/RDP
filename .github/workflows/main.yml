@@ -58,8 +58,6 @@ jobs:
           $installerPath = "$env:TEMP\tailscale.msi"
           
           Write-Host "Downloading latest Tailscale installer using curl..."
-          
-          # *** FIX: Use curl.exe for reliable downloading ***
           curl.exe -L $tsUrl -o $installerPath
           
           if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer with curl. Check URL/Network."; exit 1 }
@@ -68,6 +66,11 @@ jobs:
           # Install silently
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
+
+          # *** CRITICAL FIX: Wait for 10 seconds to ensure the EXE is registered by Windows ***
+          Write-Host "Waiting 10 seconds for Tailscale service registration..."
+          Start-Sleep -Seconds 10
+          
 
       - name: Establish Tailscale Connection 🌐
         run: |
