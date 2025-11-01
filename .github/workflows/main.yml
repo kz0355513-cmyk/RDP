@@ -23,19 +23,29 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 1 -Force
 
-          # 3. فتح منفذ RDP (3389) بقاعدة مخصصة
+          # 3. فتح المنفذ (3389) بقاعدة مخصصة وتفعيل القاعدة القياسية
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
-          
-          # 4. **التعديل الجديد: تفعيل قواعد جدار الحماية RDP القياسية**
-          # هذا يضمن أن Windows لا يزال يسمح بالاتصال
           Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
-          # 5. إعادة تشغيل الخدمة والانتظار
-          Write-Host "Restarting TermService and waiting 10 seconds..."
+          # 4. **التعديل الجديد: إعادة التشغيل والتحقق من حالة الخدمة**
+          Write-Host "Restarting TermService..."
           Restart-Service -Name TermService -Force
-          Start-Sleep -Seconds 10 
+          
+          # الانتظار حتى تكون الخدمة تعمل
+          $maxWait = 30 # الانتظار بحد أقصى 30 ثانية
+          $timeout = (Get-Date).AddSeconds($maxWait)
+          Write-Host "Waiting up to $maxWait seconds for TermService to start."
+          
+          while ((Get-Service -Name TermService).Status -ne 'Running') {
+              if ((Get-Date) -gt $timeout) {
+                  Write-Error "TermService failed to start within the timeout period."
+                  exit 1
+              }
+              Start-Sleep -Seconds 2
+          }
+          Write-Host "TermService is now Running."
  
       - name: Create RDP User with Secure Password
         run: |
@@ -60,15 +70,14 @@ jobs:
  
       - name: Install Tailscale 🔧
         run: |
-          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً
+          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً (قم بتحديثه إذا لزم الأمر)
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
           Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
-          
           Start-BitsTransfer -Source $tsUrl -Destination $installerPath
           
-          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer. Check the version number in the link."; exit 1 }
+          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
           
           Write-Host "Installation starting..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
