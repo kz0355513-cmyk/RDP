@@ -1,107 +1,82 @@
-name: RDP - Powerful Max Runner
+name: SSH - Powerful Max Runner (Linux)
 
 on:
-  # هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
+  # This allows you to manually run the workflow for SSH access
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
-    runs-on: windows-latest
-    # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
-    timeout-minutes: 360 
+  secure-ssh:
+    # Use the most powerful Linux runner available
+    runs-on: ubuntu-latest
+    # Set the session duration to the maximum limit (6 hours)
+    timeout-minutes: 360
 
     steps:
-      - name: Configure RDP Settings (Finalized) 🔧
+      - name: Configure SSH and Generate Credentials 🔑
         run: |
-          Write-Host "Configuring RDP and Firewall..."
+          # 1. Generate a random, secure password for the SSH user
+          export RDP_USER="gh-user"
+          password=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*()_+{}[]|:<>?~' < /dev/urandom | head -c 16)
           
-          # تمكين RDP التقليدي وتعطيل NLA
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+          # 2. Create the new user and set their password
+          sudo useradd -m -s /bin/bash $RDP_USER
+          echo "$RDP_USER:$password" | sudo chpasswd
+          
+          # 3. Add the user to the 'sudo' group for administrative access
+          sudo usermod -aG sudo $RDP_USER
+          
+          # 4. Enable SSH service and allow password authentication
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          
+          # Ensure PasswordAuthentication is set to yes in sshd_config
+          sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl restart ssh
+          
+          # 5. Export credentials as environment variables for subsequent steps
+          echo "RDP_USER=$RDP_USER" >> $GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $GITHUB_ENV
+          
+          echo "SSH User setup complete."
 
-          # فتح المنفذ 3389 بجميع ملفات تعريف الشبكة (profile=any)
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 profile=any
-          Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
-          
-          # إعادة التشغيل والانتظار لضمان تشغيل الخدمة
-          Write-Host "Restarting TermService and waiting for service to be Running."
-          Restart-Service -Name TermService -Force
-          
-          $maxWait = 30
-          $timeout = (Get-Date).AddSeconds($maxWait)
-          while ((Get-Service -Name TermService).Status -ne 'Running') {
-              if ((Get-Date) -gt $timeout) { Write-Error "TermService failed to start."; exit 1 }
-              Start-Sleep -Seconds 2
-          }
-          Write-Host "TermService is Running."
- 
-      - name: Create RDP User with Secure Password
+      - name: Install Tailscale 🌐
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.tgz | tar zx
+          sudo cp -f jammy/tailscale /usr/bin/tailscale
+          sudo cp -f jammy/tailscaled /usr/sbin/tailscaled
           
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
-          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
- 
-      - name: Install Tailscale 🔧
+          # Start the Tailscale service
+          sudo tailscaled &
+
+      - name: Establish Tailscale Connection (Authenticate)
         run: |
-          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً 
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
-          $installerPath = "$env:TEMP\tailscale.msi"
+          # The Tailscale 'up' command connects to your tailnet using an auth key
+          # ${{ secrets.TAILSCALE_AUTH_KEY }} must be set as a repository secret
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-linux-runner-$GITHUB_RUN_ID
+
+          ts_ip=$(sudo tailscale ip -4)
+          if [ -z "$ts_ip" ]; then
+            echo "Tailscale IP not assigned. Exiting."
+            exit 1
+          fi
           
-          Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
-          Start-BitsTransfer -Source $tsUrl -Destination $installerPath
-          
-          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
-          
-          Write-Host "Installation starting..."
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
- 
-      - name: Establish Tailscale Connection 🌐
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { break }
-              $tsIP = $null
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          
-          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          
+          echo "TAILSCALE_IP=$ts_ip" >> $GITHUB_ENV
+          echo "Tailscale connected with IP: $ts_ip"
+
       - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
-          Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASSWORD"
-          Write-Host "==================`n"
+          echo -e "\n=== SSH ACCESS INFO ==="
+          echo "Runner is ACTIVE. You have up to 6 hours of access."
+          echo "Address: $TAILSCALE_IP (use this IP or its MagicDNS hostname)"
+          echo "Username: $RDP_USER"
+          echo "Password: $RDP_PASSWORD"
+          echo "Connect with: ssh $RDP_USER@$TAILSCALE_IP"
+          echo "======================\n"
           
-          # يحافظ على تشغيل سير العمل حتى الوصول إلى الحد الأقصى للمدة الزمنية (6 ساعات)
-          while ($true) {
-              Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          # Keep the workflow job running until the timeout is reached (6 hours)
+          while true; do
+            echo "[$(date)] Runner Active - Use 'Cancel workflow' to terminate"
+            sleep 300 # Sleep for 5 minutes
+          done
