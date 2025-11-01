@@ -1,13 +1,16 @@
-name: RDP
- 
+name: RDP - Powerful Max Runner
+
 on:
+  # هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
   workflow_dispatch:
- 
+
 jobs:
   secure-rdp:
+    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
     runs-on: windows-latest
-    timeout-minutes: 360 # الحد الأقصى الرسمي لـ GitHub Actions هو 360 دقيقة (6 ساعات)
- 
+    # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
+    timeout-minutes: 360 
+
     steps:
       - name: Configure RDP Settings (Finalized) 🔧
         run: |
@@ -58,7 +61,7 @@ jobs:
  
       - name: Install Tailscale 🔧
         run: |
-          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً (قم بتحديثه إذا لزم الأمر)
+          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً 
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
@@ -97,6 +100,7 @@ jobs:
           Write-Host "Password: $env:RDP_PASSWORD"
           Write-Host "==================`n"
           
+          # يحافظ على تشغيل سير العمل حتى الوصول إلى الحد الأقصى للمدة الزمنية (6 ساعات)
           while ($true) {
               Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
