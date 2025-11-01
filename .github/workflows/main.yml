@@ -1,64 +1,66 @@
-name: SSH - Powerful Max Runner (Linux)
+name: SSH - Robust Linux Runner (Official Action)
 
 on:
+  # This allows you to manually run the workflow for SSH access
   workflow_dispatch:
 
 jobs:
   secure-ssh:
+    # Use the Ubuntu runner
     runs-on: ubuntu-latest
+    # Set the session duration to the maximum limit (6 hours)
     timeout-minutes: 360
 
     steps:
       - name: Configure SSH and Generate Credentials 🔑
+        # This part remains the same to set up the SSH user and service
         run: |
           export RDP_USER="gh-user"
+          # Generate a 16-character secure password
           password=$(LC_ALL=C tr -dc 'A-Za-z0-9!@#$%^&*()_+{}[]|:<>?~' < /dev/urandom | head -c 16)
           
+          # Create user, set password, and grant sudo rights
           sudo useradd -m -s /bin/bash $RDP_USER
           echo "$RDP_USER:$password" | sudo chpasswd
           sudo usermod -aG sudo $RDP_USER
           
+          # Install and configure SSH server
           sudo apt-get update
           sudo apt-get install -y openssh-server
-          sudo systemctl enable ssh
           sudo systemctl start ssh
           
+          # Enable password authentication (required since we generate a password)
+          sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
           sudo systemctl restart ssh
           
+          # Export credentials as environment variables
           echo "RDP_USER=$RDP_USER" >> $GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $GITHUB_ENV
           
           echo "SSH User setup complete."
 
-      - name: Install Tailscale 🌐 (Fixed URL)
+      - name: Establish Tailscale Connection (Official Action) 🌐
+        # This step handles installation and connection automatically
+        uses: tailscale/github-action@v2
+        with:
+          # Use your stored secret here
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }} 
+          # Assign a hostname to easily identify the runner in your Tailscale admin console
+          hostname: gh-linux-runner-${{ github.run_id }}
+          # Set up userspace networking for ephemeral environments
+          args: "--tun=userspace-networking"
+          
+      - name: Get Tailscale IP Address
+        id: get_ip
         run: |
-          # Use the official, reliable repository method
-          sudo apt-get update
-          sudo apt-get install -y curl
-          
-          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/jammy.asc | sudo gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu jammy main" | sudo tee /etc/apt/sources.list.d/tailscale.list
-          
-          sudo apt-get update
-          sudo apt-get install -y tailscale
-          
-          # Start the Tailscale service daemon in the background
-          sudo /usr/sbin/tailscaled --tun=userspace-networking &
-
-      - name: Establish Tailscale Connection (Authenticate)
-        run: |
-          # Use the 'tailscale up' command to authenticate
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-linux-runner-$GITHUB_RUN_ID
-
-          ts_ip=$(sudo tailscale ip -4)
+          # Use the 'tailscale ip' command to retrieve the assigned IP
+          ts_ip=$(/usr/bin/tailscale ip -4)
           if [ -z "$ts_ip" ]; then
             echo "Tailscale IP not assigned. Exiting."
             exit 1
           fi
-          
           echo "TAILSCALE_IP=$ts_ip" >> $GITHUB_ENV
-          echo "Tailscale connected with IP: $ts_ip"
 
       - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
@@ -70,7 +72,8 @@ jobs:
           echo "Connect with: ssh $RDP_USER@$TAILSCALE_IP"
           echo "======================\n"
           
+          # Keep the workflow job running until the timeout is reached (6 hours)
           while true; do
             echo "[$(date)] Runner Active - Use 'Cancel workflow' to terminate"
-            sleep 300
+            sleep 300 # Sleep for 5 minutes
           done
