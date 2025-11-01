@@ -6,10 +6,10 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 180 
+    timeout-minutes: 360 # الحد الأقصى الرسمي لـ GitHub Actions هو 360 دقيقة (6 ساعات)
  
     steps:
-      - name: Configure RDP (Final Attempt Settings) 🔧
+      - name: Configure RDP Settings (Finalized) 🔧
         run: |
           Write-Host "Configuring RDP and Firewall..."
           
@@ -71,7 +71,7 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
  
-      - name: Establish Tailscale Connection (No SSH Command) 🌐
+      - name: Establish Tailscale Connection 🌐
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
@@ -88,10 +88,10 @@ jobs:
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           
-      - name: Maintain Connection and Display Access Info ✨ (No Verification)
+      - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
           Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "Runner is ACTIVE. Use MSTSC.exe to connect."
+          Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
