@@ -9,18 +9,32 @@ jobs:
     timeout-minutes: 180 
  
     steps:
-      - name: Configure Core RDP Settings
+      - name: Configure Core RDP Settings and Start Service 🔧
         run: |
+          Write-Host "Configuring RDP..."
+          
+          # 1. تمكين سطح المكتب البعيد
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           
+          # 2. **تعطيل مصادقة مستوى الشبكة (NLA) لضمان نجاح الاتصال في بيئة Runner**
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force # تعطيل NLA
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 1 -Force # تعيين طبقة الأمان إلى RDP Security (بدلاً من NLA)
+
+          # 3. فتح منفذ RDP (3389) في جدار الحماية
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
-
+          
+          # 4. إعادة تشغيل الخدمة والانتظار
+          Write-Host "Restarting TermService and waiting 10 seconds..."
           Restart-Service -Name TermService -Force
+          Start-Sleep -Seconds 10 # الانتظار لضمان بدء الخدمة بالكامل
  
       - name: Create RDP User with Secure Password
+        # ... (نفس الكود السابق - تم حذفه للإيجاز)
         run: |
           Add-Type -AssemblyName System.Security
           $charSet = @{
@@ -50,16 +64,15 @@ jobs:
               exit 1
           }
  
-      - name: Install Tailscale 🔧 (Final Attempt with Versioned Link)
+      - name: Install Tailscale 🔧
+        # ... (نفس الكود السابق مع رابط الإصدار الثابت 1.90.6 - تم حذفه للإيجاز)
         run: |
-          # **التعديل الحاسم:** استخدام رابط محدد بالإصدار (1.90.6 كمثال على الأحدث)
-          $tsVersion = "1.90.6" # تأكد من استخدام أحدث إصدار متاح لزيادة الموثوقية
+          $tsVersion = "1.90.6"
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
           Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
           
-          # استخدام Start-BitsTransfer
           Start-BitsTransfer -Source $tsUrl -Destination $installerPath
           
           if (-not (Test-Path $installerPath)) {
@@ -72,6 +85,7 @@ jobs:
           Remove-Item $installerPath -Force
  
       - name: Establish Tailscale Connection
+        # ... (نفس الكود السابق - تم حذفه للإيجاز)
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
@@ -97,14 +111,24 @@ jobs:
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          # **التعديل:** محاولة الاتصال مرتين بفترة انتظار بينهما
+          $TestAttempts = 0
+          do {
+              Write-Host "Attempting TCP connection test #$($TestAttempts+1)..."
+              $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
+              if ($testResult.TcpTestSucceeded) {
+                  Write-Host "TCP connectivity successful!"
+                  exit 0
+              }
+              $TestAttempts++
+              if ($TestAttempts -lt 3) { Start-Sleep -Seconds 5 }
+          } while ($TestAttempts -lt 3)
+
+          Write-Error "TCP connection to RDP port 3389 failed after 3 attempts."
+          exit 1
  
       - name: Maintain Connection
+        # ... (نفس الكود السابق - تم حذفه للإيجاز)
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
