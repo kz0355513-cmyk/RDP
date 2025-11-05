@@ -22,8 +22,8 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # يحدد مدة المهلة القصوى للجلسة بناءً على المدخل (أو 6 ساعات افتراضياً)
-    timeout-minutes: ${{ github.event.inputs.duration_hours || 6 | int * 60 }} 
+    # 🌟 تم تصحيح هذا السطر 
+    timeout-minutes: ${{ (github.event.inputs.duration_hours || 6) | int * 60 }} 
 
     steps:
       - name: ⚙️ Configure RDP and Firewall Settings
@@ -134,7 +134,7 @@ jobs:
           Write-Host "=========================================="
 
           # حلقة لا نهائية للحفاظ على سير العمل قيد التشغيل حتى تنتهي مدة الجلسة
-          $timeoutMinutes = ${{ github.event.inputs.duration_hours || 6 | int * 60 }}
+          $timeoutMinutes = ${{ (github.event.inputs.duration_hours || 6) | int * 60 }}
           $timeoutSeconds = $timeoutMinutes * 60
           $startTime = Get-Date
           $endTime = $startTime.AddSeconds($timeoutSeconds)
