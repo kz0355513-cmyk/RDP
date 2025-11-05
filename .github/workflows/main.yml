@@ -1,37 +1,47 @@
-name: RDP - Powerful Max Runner
+name: RDP - Maximum Power Runner 🚀
 
+# يتيح التشغيل اليدوي مع خيار تعديل مدة الجلسة
 on:
-
-  # هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
   workflow_dispatch:
-
+    inputs:
+      duration_hours:
+        description: 'مدة الجلسة (بالساعات). الحد الأقصى 6.'
+        required: false
+        default: '6' # الافتراضي: 6 ساعات (أقصى مدة)
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+          - '6'
+          
 jobs:
   secure-rdp:
-    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
+    # 🌟 هذا السطر هو مفتاح الحصول على "أقوى" جهاز (Runner) متاح ضمن فئة Windows القياسية 
     runs-on: windows-latest
-    # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
-    timeout-minutes: 360 
+    
+    # ضبط مدة الجلسة إلى 6 ساعات كحد أقصى (360 دقيقة)
+    timeout-minutes: ${{ github.event.inputs.duration_hours || 6 | int * 60 }} 
 
     steps:
-      - name: Configure RDP Settings (Finalized) 🔧
+      - name: ⚙️ Configure RDP Settings 
+        shell: powershell
         run: |
           Write-Host "Configuring RDP and Firewall..."
           
-          # تمكين RDP التقليدي وتعطيل NLA
+          # تمكين RDP (بروتوكول سطح المكتب البعيد)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-
-          # فتح المنفذ 3389 بجميع ملفات تعريف الشبكة (profile=any)
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 profile=any
-          Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
-          # إعادة التشغيل والانتظار لضمان تشغيل الخدمة
-          Write-Host "Restarting TermService and waiting for service to be Running."
+          # تفعيل قاعدة جدار الحماية لـ RDP (المنفذ 3389)
+          Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue 
+
+          Write-Host "Restarting TermService..."
           Restart-Service -Name TermService -Force
           
-          $maxWait = 30
+          # انتظار أن تبدأ الخدمة لضمان الجاهزية
+          $maxWait = 30 
           $timeout = (Get-Date).AddSeconds($maxWait)
           while ((Get-Service -Name TermService).Status -ne 'Running') {
               if ((Get-Date) -gt $timeout) { Write-Error "TermService failed to start."; exit 1 }
@@ -39,70 +49,97 @@ jobs:
           }
           Write-Host "TermService is Running."
 
-      - name: Create RDP User with Secure Password
+      - name: 🔑 Create Secure RDP User and Display Password
+        shell: powershell
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $username = "RDPUser" 
+          $length = 16
+          $chars = [char[]] "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+          $password = -join ($chars | Get-Random -Count $length)
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
           
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          if (-not (Get-LocalUser -Name $username)) { Write-Error "User creation failed"; exit 1 }
           
-          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
           
-          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
-
-      - name: Install Tailscale 🔧
+          Write-Host "`n=========================================="
+          Write-Host "RDP USERNAME: $username"
+          Write-Host "RDP PASSWORD: $password"
+          Write-Host "=========================================="
+          
+      - name: ⬇️ Install Tailscale (Reliable Download)
+        shell: powershell
         run: |
-          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً 
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
+          $tsUrl = "https://tailscale.com/download/windows/stable/tailscale-setup.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
-          Start-BitsTransfer -Source $tsUrl -Destination $installerPath
+          Write-Host "Downloading Tailscale from: $tsUrl"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 120
           
           if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
-          
+
           Write-Host "Installation starting..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection 🌐
+          
+      - name: 🌐 Establish Tailscale Connection and Get IP
+        shell: powershell
         run: |
+          if (-not "${{ secrets.TAILSCALE_AUTH_KEY }}") { Write-Error "TAILSCALE_AUTH_KEY is not set in secrets!"; exit 1 }
+
+          # الاتصال بـ Tailscale
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
           $tsIP = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { break }
+          while (-not $tsIP -and $retries -lt 20) { 
+              $output = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              $tsIP = $output -join "`n" 
+              $tsIP = $tsIP.Trim()
+              
+              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { 
+                  Write-Host "Tailscale IP assigned: $tsIP"
+                  break 
+              }
               $tsIP = $null
+              Write-Host "Waiting for Tailscale IP... Retrying in 5 seconds."
               Start-Sleep -Seconds 5
               $retries++
           }
-          
-          if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
+
+          if (-not $tsIP) { Write-Error "Tailscale IP not assigned after multiple retries. Exiting."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           
-      - name: Maintain Connection and Display Access Info ✨ (Final Step)
+      - name: ✨ Display Access Info and Maintain Connection
+        shell: powershell
         run: |
-          Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
-          Write-Host "Address: $env:TAILSCALE_IP"
+          $durationHours = ${{ github.event.inputs.duration_hours || 6 }}
+          
+          Write-Host "`n=========================================="
+          Write-Host "          ✅ RDP ACCESS INFO ✅           "
+          Write-Host "=========================================="
+          Write-Host "Status: Runner is ACTIVE."
+          Write-Host "Max Duration: $durationHours hours (Maximum Allowed)."
+          Write-Host "------------------------------------------"
+          Write-Host "Address (Tailscale IP): $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
-          Write-Host "==================`n"
+          Write-Host "=========================================="
+
+          $timeoutMinutes = ${{ github.event.inputs.duration_hours || 6 | int * 60 }}
+          $timeoutSeconds = $timeoutMinutes * 60
+          $startTime = Get-Date
+          $endTime = $startTime.AddSeconds($timeoutSeconds)
           
-          # يحافظ على تشغيل سير العمل حتى الوصول إلى الحد الأقصى للمدة الزمنية (6 ساعات)
-          while ($true) {
-              Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
+          while ((Get-Date) -lt $endTime) {
+              $remaining = $endTime - (Get-Date)
+              Write-Host "[$(Get-Date)] Runner Active. Remaining: $($remaining.Hours)h $($remaining.Minutes)m. Use Ctrl+C in workflow to terminate."
+              Start-Process -FilePath "cmd.exe" -ArgumentList "/c ping -n 100 127.0.0.1 > nul" -NoNewWindow -Wait
+              Start-Sleep -Seconds 120 
           }
+          Write-Host "Maximum session duration reached. Exiting runner."
