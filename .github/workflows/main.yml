@@ -83,7 +83,8 @@ jobs:
           $retryDelay = 10 # seconds
           for ($i = 1; $i -le $retries; $i++) {
               try {
-                  Write-Host "Attempt $i/$retries: Downloading Tailscale from: $tsUrl"
+                  # ✅ التصحيح: استخدام $() حول $i و $retries لتجنب خطأ تفسير PowerShell
+                  Write-Host "Attempt $($i)/$($retries): Downloading Tailscale from: $tsUrl"
                   Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 120 -ErrorAction Stop
                   Write-Host "Download successful."
                   break # Exit loop on success
