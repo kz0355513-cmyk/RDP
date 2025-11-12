@@ -22,7 +22,7 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # تعيين أقصى مدة (6 ساعات = 360 دقيقة) كقيمة ثابتة.
+    # القيمة الثابتة: 360 دقيقة (6 ساعات) لتجنب أخطاء الصياغة
     timeout-minutes: 360
 
     steps:
@@ -77,27 +77,26 @@ jobs:
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          # إضافة محاولات إعادة تحميل تلقائية باستخدام curl لزيادة الموثوقية
-          $retries = 5 # زيادة عدد المحاولات
-          $retryDelay = 15 # زيادة فترة الانتظار بالثواني
+          # محاولات تحميل موثوقة باستخدام curl
+          $retries = 5 
+          $retryDelay = 15 # ثواني
           
           for ($i = 1; $i -le $retries; $i++) {
               Write-Host "Attempt $($i)/$($retries): Downloading Tailscale from: $tsUrl"
               
-              # استخدام 'curl.exe' الذي هو أداة خارجية أكثر قوة من Invoke-WebRequest في Runners
+              # استخدام 'curl.exe' - أكثر موثوقية في بيئات التشغيل الآلي
               $command = "curl.exe -L `"$tsUrl`" -o `"$installerPath`" --fail --silent"
               
-              # تنفيذ الأمر ومحاولة التقاط أي خطأ
               try {
                   Invoke-Expression -Command $command
               } catch {
                   Write-Warning "Curl execution failed: $($_.Exception.Message)"
               }
               
-              # فحص وجود الملف والتأكد من أن حجمه أكبر من 1 ميجابايت (لضمان أنه ليس ملف HTML خطأ)
+              # فحص وجود الملف والتأكد من أن حجمه أكبر من 1 ميجابايت
               if ((Test-Path $installerPath) -and (Get-Item $installerPath).Length -gt 1000000) { 
                   Write-Host "Download successful."
-                  break # الخروج من الحلقة عند النجاح
+                  break 
               }
               
               Write-Warning "Attempt $i failed: File not found or size too small. Retrying..."
