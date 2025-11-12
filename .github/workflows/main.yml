@@ -105,7 +105,7 @@ jobs:
               $tsIP = $output -join "`n" 
               $tsIP = $tsIP.Trim()
               
-              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1L,3}$') { 
+              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { 
                   Write-Host "Tailscale IP assigned: $tsIP"
                   break 
               }
@@ -126,7 +126,7 @@ jobs:
           $timeoutMinutes = [int]$durationHours * 60
           
           Write-Host "`n=========================================="
-          Write-Host "          ✅ RDP ACCESS INFO ✅             "
+          Write-Host "    	 	 ✅ RDP ACCESS INFO ✅ 	 	 	 "
           Write-Host "=========================================="
           Write-Host "Status: Runner is ACTIVE. (Max Specs: 2vCPU, 7GB RAM)"
           Write-Host "Max Duration: $durationHours hours."
