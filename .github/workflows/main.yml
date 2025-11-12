@@ -22,8 +22,8 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # تصحيح 1: إزالة || 6 واستخدام القيمة الافتراضية للمدخلات
-    timeout-minutes: ${{ github.event.inputs.duration_hours | int * 60 }} 
+    # ✅ التصحيح لخطأ '| int * 60'
+    timeout-minutes: ${{ fromJSON(github.event.inputs.duration_hours) * 60 }} 
 
     steps:
       - name: ⚙️ Configure RDP and Firewall Settings
@@ -120,7 +120,7 @@ jobs:
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
         run: |
-          # تصحيح 2: تمرير المتغيرات كنصوص وإجراء العمليات الحسابية داخل PowerShell لضمان الدقة
+          # هذه الأسطر لا تحتاج لتعديل لأنها تستخدم PowerShell للتحويل والحساب
           $durationHours = "${{ github.event.inputs.duration_hours }}"
           $timeoutMinutes = [int]$durationHours * 60
           
