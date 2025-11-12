@@ -78,10 +78,28 @@ jobs:
           $tsUrl = "https://tailscale.com/download/windows/stable/tailscale-setup.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          Write-Host "Downloading Tailscale from: $tsUrl"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 120
-          
-          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
+          # ✅ التصحيح: إضافة محاولات إعادة تحميل تلقائية (لمعالجة خطأ 500)
+          $retries = 3
+          $retryDelay = 10 # seconds
+          for ($i = 1; $i -le $retries; $i++) {
+              try {
+                  Write-Host "Attempt $i/$retries: Downloading Tailscale from: $tsUrl"
+                  Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 120 -ErrorAction Stop
+                  Write-Host "Download successful."
+                  break # Exit loop on success
+              } catch {
+                  Write-Warning "Attempt $i failed: $_.Message"
+                  if ($i -lt $retries) {
+                      Write-Host "Waiting $retryDelay seconds before retrying..."
+                      Start-Sleep -Seconds $retryDelay
+                  } else {
+                      Write-Error "Failed to download Tailscale after $retries attempts."
+                      exit 1
+                  }
+              }
+          }
+
+          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer (file not found after download attempts)."; exit 1 }
 
           Write-Host "Installation starting..."
           # التثبيت الصامت
@@ -116,7 +134,7 @@ jobs:
           }
 
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          echo "TAIILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
