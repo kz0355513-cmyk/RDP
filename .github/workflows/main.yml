@@ -22,12 +22,9 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # ✅ تم نقل vars ليصبح تابعًا للمهمة (Job) وهو الموقع الصحيح
-    vars:
-      DURATION_MINUTES: ${{ fromJSON(github.event.inputs.duration_hours) * 60 }}
-    
-    # استخدام المتغير المحسوب DURATION_MINUTES
-    timeout-minutes: ${{ vars.DURATION_MINUTES }} 
+    # ✅ التصحيح: تعيين أقصى مدة (6 ساعات * 60 دقيقة) لتجنب أخطاء الصيغة.
+    # ستتحكم الخطوة الأخيرة بالمدة الفعلية التي يختارها المستخدم.
+    timeout-minutes: 360
 
     steps:
       - name: ⚙️ Configure RDP and Firewall Settings
@@ -108,7 +105,7 @@ jobs:
               $tsIP = $output -join "`n" 
               $tsIP = $tsIP.Trim()
               
-              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { 
+              if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1L,3}$') { 
                   Write-Host "Tailscale IP assigned: $tsIP"
                   break 
               }
