@@ -123,7 +123,7 @@ jobs:
           $durationHours = ${{ github.event.inputs.duration_hours || 6 }}
           
           Write-Host "`n=========================================="
-          Write-Host "          ✅ RDP ACCESS INFO ✅           "
+          Write-Host "          ✅ RDP ACCESS INFO ✅            "
           Write-Host "=========================================="
           Write-Host "Status: Runner is ACTIVE. (Max Specs: 2vCPU, 7GB RAM)"
           Write-Host "Max Duration: $durationHours hours."
