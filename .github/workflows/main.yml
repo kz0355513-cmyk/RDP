@@ -17,13 +17,17 @@ on:
           - '5'
           - '6'
           
+# تم تعريف متغير لحساب المهلة بالدقائق (الحل لخطأ * )
+vars:
+  DURATION_MINUTES: ${{ fromJSON(github.event.inputs.duration_hours) * 60 }}
+          
 jobs:
   secure-rdp:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # ✅ التصحيح لخطأ '| int * 60'
-    timeout-minutes: ${{ fromJSON(github.event.inputs.duration_hours) * 60 }} 
+    # استخدام المتغير المحسوب DURATION_MINUTES
+    timeout-minutes: ${{ vars.DURATION_MINUTES }} 
 
     steps:
       - name: ⚙️ Configure RDP and Firewall Settings
@@ -120,7 +124,7 @@ jobs:
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
         run: |
-          # هذه الأسطر لا تحتاج لتعديل لأنها تستخدم PowerShell للتحويل والحساب
+          # هذه الأسطر سليمة ولا تحتاج تعديل
           $durationHours = "${{ github.event.inputs.duration_hours }}"
           $timeoutMinutes = [int]$durationHours * 60
           
