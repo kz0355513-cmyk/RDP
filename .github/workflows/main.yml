@@ -22,7 +22,7 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
+    # تصحيح 1: إزالة || 6 واستخدام القيمة الافتراضية للمدخلات
     timeout-minutes: ${{ github.event.inputs.duration_hours | int * 60 }} 
 
     steps:
@@ -120,8 +120,9 @@ jobs:
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
         run: |
-          # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
-          $durationHours = ${{ github.event.inputs.duration_hours }}
+          # تصحيح 2: تمرير المتغيرات كنصوص وإجراء العمليات الحسابية داخل PowerShell لضمان الدقة
+          $durationHours = "${{ github.event.inputs.duration_hours }}"
+          $timeoutMinutes = [int]$durationHours * 60
           
           Write-Host "`n=========================================="
           Write-Host "          ✅ RDP ACCESS INFO ✅             "
@@ -135,8 +136,6 @@ jobs:
           Write-Host "=========================================="
 
           # حلقة لا نهائية للحفاظ على سير العمل قيد التشغيل حتى تنتهي مدة الجلسة
-          # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
-          $timeoutMinutes = ${{ github.event.inputs.duration_hours | int * 60 }}
           $timeoutSeconds = $timeoutMinutes * 60
           $startTime = Get-Date
           $endTime = $startTime.AddSeconds($timeoutSeconds)
