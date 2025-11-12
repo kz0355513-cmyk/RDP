@@ -78,7 +78,7 @@ jobs:
           $tsUrl = "https://tailscale.com/download/windows/stable/tailscale-setup.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          # ✅ التصحيح: إضافة محاولات إعادة تحميل تلقائية (لمعالجة خطأ 500)
+          # إضافة محاولات إعادة تحميل تلقائية (لمعالجة خطأ 500)
           $retries = 3
           $retryDelay = 10 # seconds
           for ($i = 1; $i -le $retries; $i++) {
@@ -88,7 +88,8 @@ jobs:
                   Write-Host "Download successful."
                   break # Exit loop on success
               } catch {
-                  Write-Warning "Attempt $i failed: $_.Message"
+                  # ✅ التصحيح: استخدام $() حول $_.Message لمعالجة خطأ المتغير
+                  Write-Warning "Attempt $i failed: $($_.Message)"
                   if ($i -lt $retries) {
                       Write-Host "Waiting $retryDelay seconds before retrying..."
                       Start-Sleep -Seconds $retryDelay
@@ -134,7 +135,8 @@ jobs:
           }
 
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
-          echo "TAIILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          # ✅ التصحيح: تصحيح الخطأ الإملائي TAIILSCALE_IP
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
