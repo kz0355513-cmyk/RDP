@@ -22,8 +22,8 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # 🌟 تم تصحيح هذا السطر 
-    timeout-minutes: ${{ (github.event.inputs.duration_hours || 6) | int * 60 }} 
+    # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
+    timeout-minutes: ${{ github.event.inputs.duration_hours | int * 60 }} 
 
     steps:
       - name: ⚙️ Configure RDP and Firewall Settings
@@ -120,10 +120,11 @@ jobs:
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
         run: |
-          $durationHours = ${{ github.event.inputs.duration_hours || 6 }}
+          # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
+          $durationHours = ${{ github.event.inputs.duration_hours }}
           
           Write-Host "`n=========================================="
-          Write-Host "          ✅ RDP ACCESS INFO ✅            "
+          Write-Host "          ✅ RDP ACCESS INFO ✅             "
           Write-Host "=========================================="
           Write-Host "Status: Runner is ACTIVE. (Max Specs: 2vCPU, 7GB RAM)"
           Write-Host "Max Duration: $durationHours hours."
@@ -134,7 +135,8 @@ jobs:
           Write-Host "=========================================="
 
           # حلقة لا نهائية للحفاظ على سير العمل قيد التشغيل حتى تنتهي مدة الجلسة
-          $timeoutMinutes = ${{ (github.event.inputs.duration_hours || 6) | int * 60 }}
+          # ✅ تم تصحيح هذا السطر (تم إزالة || 6)
+          $timeoutMinutes = ${{ github.event.inputs.duration_hours | int * 60 }}
           $timeoutSeconds = $timeoutMinutes * 60
           $startTime = Get-Date
           $endTime = $startTime.AddSeconds($timeoutSeconds)
