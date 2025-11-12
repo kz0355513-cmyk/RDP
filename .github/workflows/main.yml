@@ -22,9 +22,7 @@ jobs:
     # 🥇 هذا السطر يطلب أقوى جهاز افتراضي (Runner) متاح ضمن الفئة القياسية 
     runs-on: windows-latest
     
-    # ✅ التصحيح النهائي: تعيين أقصى مدة (6 ساعات = 360 دقيقة) كقيمة ثابتة.
-    # تم إزالة كافة محاولات الحساب الديناميكي لـ timeout-minutes نظراً لأنها تسبب أخطاء صيغة متكررة في YAML.
-    # ستظل المدة الفعلية محكومة بالـ PowerShell Script في الخطوة الأخيرة (Display Access Info).
+    # تعيين أقصى مدة (6 ساعات = 360 دقيقة) كقيمة ثابتة.
     timeout-minutes: 360
 
     steps:
@@ -75,30 +73,40 @@ jobs:
       - name: ⬇️ Install Tailscale
         shell: powershell
         run: |
-          # تحميل أحدث إصدار مستقر من Tailscale
-          $tsUrl = "https://tailscale.com/download/windows/stable/tailscale-setup.msi" 
+          # رابط تحميل ثابت لأحدث نسخة من Tailscale
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
           
-          # إضافة محاولات إعادة تحميل تلقائية (لمعالجة خطأ 500)
-          $retries = 3
-          $retryDelay = 10 # seconds
+          # إضافة محاولات إعادة تحميل تلقائية باستخدام curl لزيادة الموثوقية
+          $retries = 5 # زيادة عدد المحاولات
+          $retryDelay = 15 # زيادة فترة الانتظار بالثواني
+          
           for ($i = 1; $i -le $retries; $i++) {
+              Write-Host "Attempt $($i)/$($retries): Downloading Tailscale from: $tsUrl"
+              
+              # استخدام 'curl.exe' الذي هو أداة خارجية أكثر قوة من Invoke-WebRequest في Runners
+              $command = "curl.exe -L `"$tsUrl`" -o `"$installerPath`" --fail --silent"
+              
+              # تنفيذ الأمر ومحاولة التقاط أي خطأ
               try {
-                  # ✅ التصحيح: استخدام $() حول $i و $retries لتجنب خطأ تفسير PowerShell
-                  Write-Host "Attempt $($i)/$($retries): Downloading Tailscale from: $tsUrl"
-                  Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 120 -ErrorAction Stop
-                  Write-Host "Download successful."
-                  break # Exit loop on success
+                  Invoke-Expression -Command $command
               } catch {
-                  # ✅ التصحيح: استخدام $() حول $_.Message لمعالجة خطأ المتغير
-                  Write-Warning "Attempt $i failed: $($_.Message)"
-                  if ($i -lt $retries) {
-                      Write-Host "Waiting $retryDelay seconds before retrying..."
-                      Start-Sleep -Seconds $retryDelay
-                  } else {
-                      Write-Error "Failed to download Tailscale after $retries attempts."
-                      exit 1
-                  }
+                  Write-Warning "Curl execution failed: $($_.Exception.Message)"
+              }
+              
+              # فحص وجود الملف والتأكد من أن حجمه أكبر من 1 ميجابايت (لضمان أنه ليس ملف HTML خطأ)
+              if ((Test-Path $installerPath) -and (Get-Item $installerPath).Length -gt 1000000) { 
+                  Write-Host "Download successful."
+                  break # الخروج من الحلقة عند النجاح
+              }
+              
+              Write-Warning "Attempt $i failed: File not found or size too small. Retrying..."
+              if ($i -lt $retries) {
+                  Write-Host "Waiting $retryDelay seconds before retrying..."
+                  Start-Sleep -Seconds $retryDelay
+              } else {
+                  Write-Error "Failed to download Tailscale after $retries attempts. Exiting."
+                  exit 1
               }
           }
 
@@ -142,7 +150,6 @@ jobs:
       - name: ✨ Display Access Info and Maintain Connection
         shell: powershell
         run: |
-          # هذه الأسطر سليمة ولا تحتاج تعديل
           $durationHours = "${{ github.event.inputs.duration_hours }}"
           $timeoutMinutes = [int]$durationHours * 60
           
