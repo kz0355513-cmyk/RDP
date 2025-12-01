@@ -1,4 +1,4 @@
-name: RDP - Powerful Max Runner
+name: RDP - Powerful Max Runner (UAE Self-Hosted)
 
 on:
 
@@ -7,8 +7,9 @@ on:
 
 jobs:
   secure-rdp:
-    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
-    runs-on: windows-latest
+    # 🚨 الأهم: يجب أن يكون هذا الوسم مطابقًا للوسم الذي تعينه للعدّاء المستضاف ذاتيًا في الإمارات.
+    #  (مثلاً: خادم Windows VM على Microsoft Azure في منطقة UAE North).
+    runs-on: [self-hosted, windows, uae-runner]
     # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
     timeout-minutes: 360 
 
@@ -42,7 +43,7 @@ jobs:
       - name: Create RDP User with Secure Password
         run: |
           Add-Type -AssemblyName System.Security
-          $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+          $charSet = @{ Upper     = [char[]](65..90); Lower     = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
           $rawPassword += $charSet.Lower | Get-Random -Count 4
@@ -77,7 +78,8 @@ jobs:
 
       - name: Establish Tailscale Connection 🌐
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          # تم تغيير اسم المضيف إلى gh-runner-uae-$env:GITHUB_RUN_ID للإشارة إلى الإمارات
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-uae-$env:GITHUB_RUN_ID
           
           $tsIP = $null
           $retries = 0
@@ -96,6 +98,7 @@ jobs:
         run: |
           Write-Host "`n=== RDP ACCESS INFO ==="
           Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
+          Write-Host "Note: This is a Self-Hosted runner. Its location is determined by your server's location (e.g., UAE North)."
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
