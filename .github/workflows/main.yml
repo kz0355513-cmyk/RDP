@@ -1,14 +1,14 @@
-name: RDP - Powerful Max Runner (USA Self-Hosted) 🇺🇸
+name: RDP - Powerful Max Runner
 
-# هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
 on:
+
+  # هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    # 🚨 الأهم: يجب أن يكون هذا الوسم مطابقًا للوسم الذي تعينه للعدّاء المستضاف ذاتيًا في الولايات المتحدة.
-    #  (مثلاً: خادم Windows VM على Microsoft Azure في منطقة US East).
-    runs-on: [self-hosted, windows, usa-runner] # <-- تم التحقق من الوسوم
+    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
+    runs-on: windows-latest
     # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
     timeout-minutes: 360 
 
@@ -42,7 +42,7 @@ jobs:
       - name: Create RDP User with Secure Password
         run: |
           Add-Type -AssemblyName System.Security
-          $charSet = @{ Upper      = [char[]](65..90); Lower      = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+          $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
           $rawPassword += $charSet.Lower | Get-Random -Count 4
@@ -55,9 +55,8 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          # ✅ FIX: استخدام Add-Content لضمان الكتابة الصحيحة في ملف متغيرات البيئة (GITHUB_ENV)
-          Add-Content -Path $env:GITHUB_ENV -Value "RDP_USER=RDP"
-          Add-Content -Path $env:GITHUB_ENV -Value "RDP_PASSWORD=$password"
+          echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
           
           if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
@@ -78,14 +77,12 @@ jobs:
 
       - name: Establish Tailscale Connection 🌐
         run: |
-          # تم تغيير اسم المضيف إلى gh-runner-usa-$env:GITHUB_RUN_ID للإشارة إلى الولايات المتحدة
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-usa-$env:GITHUB_RUN_ID
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              # التحقق من أن القيمة هي عنوان IP صالح
               if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { break }
               $tsIP = $null
               Start-Sleep -Seconds 5
@@ -93,14 +90,12 @@ jobs:
           }
           
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
-          # ✅ FIX: استخدام Add-Content لضمان الكتابة الصحيحة في ملف متغيرات البيئة (GITHUB_ENV)
-          Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$tsIP"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           
       - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
           Write-Host "`n=== RDP ACCESS INFO ==="
           Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
-          Write-Host "Note: This is a Self-Hosted runner. Its location is determined by your server's location (e.g., USA East)."
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASSWORD"
