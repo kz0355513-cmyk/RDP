@@ -1,36 +1,26 @@
-name: RDP - windows 11 
+name: RDP - windows 11 with Sunshine
 
 on:
-
-  # هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    # هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
     runs-on: windows-latest
-    # يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
     timeout-minutes: 360 
 
     steps:
       - name: Configure RDP Settings (Finalized) 🔧
         run: |
           Write-Host "Configuring RDP and Firewall..."
-          
-          # تمكين RDP التقليدي وتعطيل NLA
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
 
-          # فتح المنفذ 3389 بجميع ملفات تعريف الشبكة (profile=any)
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 profile=any
           Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
           
-          # إعادة التشغيل والانتظار لضمان تشغيل الخدمة
-          Write-Host "Restarting TermService and waiting for service to be Running."
           Restart-Service -Name TermService -Force
-          
           $maxWait = 30
           $timeout = (Get-Date).AddSeconds($maxWait)
           while ((Get-Service -Name TermService).Status -ne 'Running') {
@@ -57,21 +47,13 @@ jobs:
           
           echo "RDP_USER=RDP" >> $env:GITHUB_ENV
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
       - name: Install Tailscale 🔧
         run: |
-          $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً 
+          $tsVersion = "1.90.6" 
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
           $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
           Start-BitsTransfer -Source $tsUrl -Destination $installerPath
-          
-          if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
-          
-          Write-Host "Installation starting..."
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
@@ -88,21 +70,40 @@ jobs:
               Start-Sleep -Seconds 5
               $retries++
           }
-          
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Install and Start Sunshine ☀️
+        run: |
+          Write-Host "Downloading and installing Sunshine..."
+          # تحميل أحدث نسخة من Sunshine لنظام ويندوز
+          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine-windows-installer.exe"
+          $installerPath = "$env:TEMP\sunshine-installer.exe"
           
+          Start-BitsTransfer -Source $sunshineUrl -Destination $installerPath
+          
+          # تثبيت صامت لـ Sunshine
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
+          Remove-Item $installerPath -Force
+          
+          # فتح منفذ Sunshine في الجدار الناري (افتراضياً 47989 و 47990 وغيرها)
+          netsh advfirewall firewall add rule name="Sunshine-Web" dir=in action=allow protocol=TCP localport=47990 profile=any
+          netsh advfirewall firewall add rule name="Sunshine-Stream" dir=in action=allow protocol=TCP localport=47989 profile=any
+          netsh advfirewall firewall add rule name="Sunshine-UDP" dir=in action=allow protocol=UDP localport=47998-48000 profile=any
+
+          Write-Host "Starting Sunshine service..."
+          Start-Service sunshine -ErrorAction SilentlyContinue
+
       - name: Maintain Connection and Display Access Info ✨ (Final Step)
         run: |
-          Write-Host "`n=== RDP ACCESS INFO ==="
-          Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "`n=== ACCESS INFO ==="
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "RDP Username: $env:RDP_USER"
+          Write-Host "RDP Password: $env:RDP_PASSWORD"
+          Write-Host "Sunshine Web UI: https://$env:TAILSCALE_IP:47990"
           Write-Host "==================`n"
           
-          # يحافظ على تشغيل سير العمل حتى الوصول إلى الحد الأقصى للمدة الزمنية (6 ساعات)
           while ($true) {
-              Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] Runner Active..."
               Start-Sleep -Seconds 300
           }
