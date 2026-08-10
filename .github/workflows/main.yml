@@ -11,9 +11,9 @@ jobs:
     steps:
 
       # ============================================================
-      # ENABLE RDP
+      # 1. ENABLE RDP
       # ============================================================
-      - name: Configure RDP Settings 🔧
+      - name: Configure RDP 🔧
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -38,7 +38,8 @@ jobs:
             -Value 1 `
             -Force
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall delete rule `
+            name="RDP-Tailscale" 2>$null
 
           netsh advfirewall firewall add rule `
             name="RDP-Tailscale" `
@@ -53,7 +54,9 @@ jobs:
             -DisplayName "Remote Desktop (TCP-In)" `
             -ErrorAction SilentlyContinue
 
-          Restart-Service -Name TermService -Force
+          Restart-Service `
+            -Name TermService `
+            -Force
 
           $timeout = (Get-Date).AddSeconds(30)
 
@@ -70,7 +73,7 @@ jobs:
 
 
       # ============================================================
-      # CREATE RDP USER
+      # 2. CREATE RDP USER
       # ============================================================
       - name: Create RDP User 🔐
         shell: powershell
@@ -125,7 +128,7 @@ jobs:
 
 
       # ============================================================
-      # INSTALL TAILSCALE
+      # 3. INSTALL TAILSCALE
       # ============================================================
       - name: Install Tailscale 🌐
         shell: powershell
@@ -134,7 +137,8 @@ jobs:
 
           $tsVersion = "1.90.6"
 
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
+          $tsUrl = `
+            "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
 
           $installer = "$env:TEMP\tailscale.msi"
 
@@ -142,26 +146,30 @@ jobs:
 
           curl.exe `
             -L `
-            --retry 5 `
+            --fail `
+            --retry 8 `
+            --retry-all-errors `
             --retry-delay 5 `
             --connect-timeout 30 `
             --max-time 300 `
             -o "$installer" `
             "$tsUrl"
 
-          if (-not (Test-Path $installer)) {
+          if ($LASTEXITCODE -ne 0) {
             throw "Tailscale download failed."
           }
 
-          if ((Get-Item $installer).Length -lt 1000000) {
-            throw "Tailscale installer appears to be invalid."
+          if (-not (Test-Path $installer)) {
+            throw "Tailscale installer was not downloaded."
           }
-
-          Write-Host "Installing Tailscale..."
 
           Start-Process `
             msiexec.exe `
-            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -ArgumentList `
+              "/i",
+              "`"$installer`"",
+              "/quiet",
+              "/norestart" `
             -Wait
 
           Remove-Item `
@@ -173,9 +181,9 @@ jobs:
 
 
       # ============================================================
-      # CONNECT TAILSCALE
+      # 4. CONNECT TAILSCALE
       # ============================================================
-      - name: Establish Tailscale Connection 🌐
+      - name: Connect Tailscale 🌐
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -219,13 +227,21 @@ jobs:
             throw "Tailscale IP was not assigned."
           }
 
-          "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          # IMPORTANT:
+          # Save the IP for every following GitHub Actions step.
+          "TAILSCALE_IP=$tsIP" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
 
-          Write-Host "Tailscale IP: $tsIP"
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "TAILSCALE IP: $tsIP"
+          Write-Host "======================================"
 
 
       # ============================================================
-      # DOWNLOAD SUNSHINE
+      # 5. DOWNLOAD LATEST SUNSHINE
       # ============================================================
       - name: Download Sunshine ☀️
         shell: powershell
@@ -234,7 +250,8 @@ jobs:
 
           Write-Host "Finding latest Sunshine release..."
 
-          $apiUrl = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+          $apiUrl = `
+            "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
 
           $release = Invoke-RestMethod `
             -Uri $apiUrl `
@@ -243,44 +260,33 @@ jobs:
               "Accept" = "application/vnd.github+json"
             }
 
-          $assets = $release.assets
+          Write-Host "Latest release: $($release.tag_name)"
 
-          $asset = $assets |
+          $asset = $release.assets |
             Where-Object {
-              $_.name -match 'Windows.*AMD64.*\.msi$'
+              $_.name -match '(?i)windows.*(amd64|x64).*\.msi$'
             } |
             Select-Object -First 1
 
           if (-not $asset) {
 
-            Write-Host "Available Sunshine assets:"
+            Write-Host "Available assets:"
 
-            $assets |
+            $release.assets |
               ForEach-Object {
                 Write-Host $_.name
               }
 
-            throw "Could not find Sunshine Windows AMD64 MSI."
+            throw "Could not find Sunshine Windows MSI."
           }
 
           $sunshineUrl = $asset.browser_download_url
-          $installer = "$env:TEMP\Sunshine.msi"
 
-          Write-Host ""
-          Write-Host "Latest Sunshine:"
-          Write-Host $release.tag_name
+          $installer = "$env:TEMP\Sunshine.msi"
 
           Write-Host ""
           Write-Host "Downloading:"
           Write-Host $asset.name
-
-          Write-Host ""
-          Write-Host "Download URL:"
-          Write-Host $sunshineUrl
-
-          # ========================================================
-          # CURL WITH RETRIES
-          # ========================================================
 
           curl.exe `
             -L `
@@ -295,7 +301,7 @@ jobs:
             "$sunshineUrl"
 
           if ($LASTEXITCODE -ne 0) {
-            throw "curl failed to download Sunshine. Exit code: $LASTEXITCODE"
+            throw "Sunshine download failed."
           }
 
           if (-not (Test-Path $installer)) {
@@ -304,20 +310,22 @@ jobs:
 
           $size = (Get-Item $installer).Length
 
-          Write-Host ""
-          Write-Host "Downloaded Sunshine size: $size bytes"
+          Write-Host "Downloaded size: $size bytes"
 
           if ($size -lt 5000000) {
-            throw "Downloaded Sunshine file is suspiciously small."
+            throw "Sunshine installer appears invalid or incomplete."
           }
 
-          "SUNSHINE_INSTALLER=$installer" >> $env:GITHUB_ENV
+          "SUNSHINE_INSTALLER=$installer" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
 
-          Write-Host "Sunshine download completed successfully."
+          Write-Host "Sunshine download completed."
 
 
       # ============================================================
-      # INSTALL SUNSHINE
+      # 6. INSTALL SUNSHINE
       # ============================================================
       - name: Install Sunshine ☀️
         shell: powershell
@@ -346,9 +354,17 @@ jobs:
             -NoNewWindow
 
           if ($process.ExitCode -ne 0) {
-            Write-Host "Sunshine MSI installation failed."
-            Get-Content "$env:TEMP\sunshine-install.log" -Tail 80
-            throw "Sunshine installation failed with exit code $($process.ExitCode)."
+
+            Write-Host "Sunshine installation failed."
+
+            if (Test-Path "$env:TEMP\sunshine-install.log") {
+              Get-Content `
+                "$env:TEMP\sunshine-install.log" `
+                -Tail 100
+            }
+
+            throw `
+              "Sunshine installation failed with exit code $($process.ExitCode)."
           }
 
           Remove-Item `
@@ -360,7 +376,7 @@ jobs:
 
 
       # ============================================================
-      # CONFIGURE SUNSHINE
+      # 7. FIND SUNSHINE + CREATE CREDENTIALS
       # ============================================================
       - name: Configure Sunshine 🔐
         shell: powershell
@@ -384,16 +400,13 @@ jobs:
           }
 
           if (-not (Test-Path $sunshineExe)) {
-            throw "Sunshine executable was not found after installation."
+            throw "Sunshine executable was not found."
           }
 
-          Write-Host "Sunshine executable:"
+          Write-Host "Sunshine:"
           Write-Host $sunshineExe
 
-          # ========================================================
-          # GENERATE SUNSHINE USERNAME/PASSWORD
-          # ========================================================
-
+          # Generate Sunshine username/password
           $sunUser = "sunshine"
 
           $chars = (
@@ -408,10 +421,7 @@ jobs:
             }
           )
 
-          # ========================================================
-          # STOP SERVICE BEFORE CONFIGURATION
-          # ========================================================
-
+          # Stop service before changing credentials
           Stop-Service `
             -Name "Sunshine" `
             -Force `
@@ -419,11 +429,7 @@ jobs:
 
           Start-Sleep -Seconds 3
 
-          # ========================================================
-          # CREATE SUNSHINE CREDENTIALS
-          # ========================================================
-
-          Write-Host "Creating Sunshine Web UI credentials..."
+          Write-Host "Creating Sunshine credentials..."
 
           & $sunshineExe `
             --creds `
@@ -432,9 +438,32 @@ jobs:
 
           Start-Sleep -Seconds 3
 
-          # ========================================================
-          # FIREWALL
-          # ========================================================
+          # Save credentials for later steps
+          "SUNSHINE_USER=$sunUser" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
+
+          "SUNSHINE_PASSWORD=$sunPassword" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
+
+          "SUNSHINE_EXE=$sunshineExe" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
+
+          Write-Host "Sunshine credentials configured."
+
+
+      # ============================================================
+      # 8. SUNSHINE FIREWALL
+      # ============================================================
+      - name: Configure Sunshine Firewall 🔥
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
 
           netsh advfirewall firewall delete rule `
             name="Sunshine-Tailscale-Web" 2>$null
@@ -472,11 +501,18 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          # ========================================================
-          # START SUNSHINE
-          # ========================================================
+          Write-Host "Sunshine firewall rules configured."
 
-          Write-Host "Starting Sunshine..."
+
+      # ============================================================
+      # 9. START SUNSHINE
+      # ============================================================
+      - name: Start Sunshine ☀️
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Starting Sunshine service..."
 
           Start-Service `
             -Name "Sunshine" `
@@ -489,40 +525,29 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($service) {
-
-            Write-Host "Sunshine service status: $($service.Status)"
-
+            Write-Host "Sunshine status: $($service.Status)"
           }
 
-          # Save variables
-          "SUNSHINE_USER=$sunUser" >> $env:GITHUB_ENV
-          "SUNSHINE_PASSWORD=$sunPassword" >> $env:GITHUB_ENV
-          "SUNSHINE_EXE=$sunshineExe" >> $env:GITHUB_ENV
+          if (-not $service) {
+            Write-Host "Sunshine service was not found."
+            Write-Host "Starting sunshine.exe manually..."
 
-          Write-Host ""
-          Write-Host "=============================================="
-          Write-Host "SUNSHINE CONFIGURED"
-          Write-Host "=============================================="
-          Write-Host ""
-          Write-Host "Username:"
-          Write-Host $sunUser
-          Write-Host ""
-          Write-Host "Password:"
-          Write-Host $sunPassword
-          Write-Host ""
-          Write-Host "Web UI:"
-          Write-Host "https://$env:TAILSCALE_IP:47990"
-          Write-Host ""
-          Write-Host "=============================================="
+            Start-Process `
+              -FilePath $env:SUNSHINE_EXE `
+              -WorkingDirectory "C:\Program Files\Sunshine" `
+              -WindowStyle Hidden
+
+            Start-Sleep -Seconds 8
+          }
 
 
       # ============================================================
-      # CHECK SUNSHINE
+      # 10. CHECK SUNSHINE
       # ============================================================
       - name: Check Sunshine 🔎
         shell: powershell
         run: |
-          Write-Host "Waiting for Sunshine Web UI..."
+          Write-Host "Checking Sunshine Web UI..."
 
           $success = $false
 
@@ -537,33 +562,730 @@ jobs:
 
               $success = $true
               break
-
             }
 
-            Write-Host "Sunshine is not ready yet..."
+            Write-Host "Waiting for Sunshine..."
             Start-Sleep -Seconds 3
           }
 
-          if ($success) {
+          if (-not $success) {
 
             Write-Host ""
-            Write-Host "Sunshine Web UI is ONLINE."
-            Write-Host "Port: 47990"
+            Write-Host "WARNING:"
+            Write-Host "Sunshine Web UI is not responding on port 47990."
 
           }
           else {
 
             Write-Host ""
-            Write-Host "WARNING: Sunshine Web UI did not respond on port 47990."
-            Write-Host "The runner will continue."
+            Write-Host "Sunshine Web UI is ONLINE."
 
           }
 
 
       # ============================================================
-      # SHOW ACCESS INFORMATION
+      # 11. CREATE PIN WEB PAGE
       # ============================================================
-      - name: Display Access Information ✨
+      - name: Create PIN Page 📱
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $pinPage = "C:\sunshine-pin"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $pinPage `
+            -Force | Out-Null
+
+          # ========================================================
+          # HTML
+          # ========================================================
+
+          @'
+          <!DOCTYPE html>
+          <html>
+
+          <head>
+
+            <meta
+              name="viewport"
+              content="width=device-width, initial-scale=1"
+            >
+
+            <title>Sunshine PIN</title>
+
+            <style>
+
+              * {
+                box-sizing: border-box;
+              }
+
+              body {
+
+                margin: 0;
+
+                min-height: 100vh;
+
+                display: flex;
+
+                justify-content: center;
+
+                align-items: center;
+
+                background: #101010;
+
+                color: white;
+
+                font-family:
+                  -apple-system,
+                  BlinkMacSystemFont,
+                  "Segoe UI",
+                  Arial,
+                  sans-serif;
+              }
+
+              .card {
+
+                width: calc(100% - 32px);
+
+                max-width: 400px;
+
+                padding: 30px;
+
+                border-radius: 22px;
+
+                background: #1c1c1c;
+
+                box-shadow:
+                  0 15px 50px rgba(0,0,0,.45);
+
+                text-align: center;
+              }
+
+              h1 {
+
+                margin-top: 0;
+
+                margin-bottom: 10px;
+
+                font-size: 28px;
+              }
+
+              p {
+
+                color: #aaa;
+
+                margin-bottom: 25px;
+              }
+
+              input {
+
+                width: 100%;
+
+                padding: 16px;
+
+                border: 0;
+
+                outline: none;
+
+                border-radius: 14px;
+
+                background: #2b2b2b;
+
+                color: white;
+
+                font-size: 28px;
+
+                text-align: center;
+
+                letter-spacing: 8px;
+              }
+
+              button {
+
+                width: 100%;
+
+                margin-top: 18px;
+
+                padding: 16px;
+
+                border: 0;
+
+                border-radius: 14px;
+
+                background: white;
+
+                color: black;
+
+                font-size: 18px;
+
+                font-weight: 700;
+              }
+
+              button:active {
+
+                transform: scale(.98);
+              }
+
+              #status {
+
+                margin-top: 20px;
+
+                min-height: 24px;
+
+                color: #ccc;
+              }
+
+            </style>
+
+          </head>
+
+          <body>
+
+            <div class="card">
+
+              <h1>Sunshine PIN</h1>
+
+              <p>
+                Enter the 4-digit PIN shown by Moonlight.
+              </p>
+
+              <form id="pinForm">
+
+                <input
+                  id="pin"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  maxlength="4"
+                  minlength="4"
+                  pattern="[0-9]{4}"
+                  placeholder="••••"
+                  required
+                >
+
+                <button type="submit">
+                  CONNECT
+                </button>
+
+              </form>
+
+              <div id="status"></div>
+
+            </div>
+
+            <script>
+
+              const form =
+                document.getElementById("pinForm");
+
+              const pinInput =
+                document.getElementById("pin");
+
+              const status =
+                document.getElementById("status");
+
+              form.addEventListener(
+                "submit",
+                async function(event) {
+
+                  event.preventDefault();
+
+                  const pin =
+                    pinInput.value.trim();
+
+                  if (!/^[0-9]{4}$/.test(pin)) {
+
+                    status.textContent =
+                      "Enter a 4-digit PIN.";
+
+                    return;
+                  }
+
+                  status.textContent =
+                    "Connecting...";
+
+                  try {
+
+                    const response =
+                      await fetch(
+                        "/pair",
+                        {
+                          method: "POST",
+
+                          headers: {
+                            "Content-Type":
+                              "application/json"
+                          },
+
+                          body:
+                            JSON.stringify({
+                              pin: pin
+                            })
+                        }
+                      );
+
+                    const data =
+                      await response.json();
+
+                    if (data.success) {
+
+                      status.textContent =
+                        "✓ PIN accepted.";
+
+                    } else {
+
+                      status.textContent =
+                        "✕ " +
+                        (data.error ||
+                         "PIN rejected.");
+
+                    }
+
+                  } catch (error) {
+
+                    status.textContent =
+                      "Connection error.";
+
+                  }
+
+                }
+              );
+
+            </script>
+
+          </body>
+
+          </html>
+          '@ | Set-Content `
+            -Path "$pinPage\index.html" `
+            -Encoding UTF8
+
+
+      # ============================================================
+      # 12. CREATE PIN SERVER
+      # ============================================================
+      - name: Create PIN Server 🖥️
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $pinPage = "C:\sunshine-pin"
+
+          @'
+          import os
+          import json
+          import base64
+          import ssl
+          import urllib.request
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          SUNSHINE_USER = os.environ.get(
+              "SUNSHINE_USER",
+              ""
+          )
+
+          SUNSHINE_PASSWORD = os.environ.get(
+              "SUNSHINE_PASSWORD",
+              ""
+          )
+
+          SUNSHINE_URL = (
+              "https://127.0.0.1:47990/api/pin"
+          )
+
+          INDEX_FILE = (
+              r"C:\sunshine-pin\index.html"
+          )
+
+
+          class Handler(BaseHTTPRequestHandler):
+
+              def send_json(self, code, data):
+
+                  body = json.dumps(
+                      data
+                  ).encode("utf-8")
+
+                  self.send_response(code)
+
+                  self.send_header(
+                      "Content-Type",
+                      "application/json"
+                  )
+
+                  self.send_header(
+                      "Content-Length",
+                      str(len(body))
+                  )
+
+                  self.end_headers()
+
+                  self.wfile.write(body)
+
+
+              def do_GET(self):
+
+                  if self.path != "/":
+
+                      self.send_error(404)
+
+                      return
+
+                  try:
+
+                      with open(
+                          INDEX_FILE,
+                          "rb"
+                      ) as file:
+
+                          data = file.read()
+
+                      self.send_response(200)
+
+                      self.send_header(
+                          "Content-Type",
+                          "text/html; charset=utf-8"
+                      )
+
+                      self.send_header(
+                          "Content-Length",
+                          str(len(data))
+                      )
+
+                      self.end_headers()
+
+                      self.wfile.write(data)
+
+                  except Exception as e:
+
+                      self.send_error(
+                          500,
+                          str(e)
+                      )
+
+
+              def do_POST(self):
+
+                  if self.path != "/pair":
+
+                      self.send_json(
+                          404,
+                          {
+                              "success": False
+                          }
+                      )
+
+                      return
+
+                  try:
+
+                      length = int(
+                          self.headers.get(
+                              "Content-Length",
+                              "0"
+                          )
+                      )
+
+                      body = self.rfile.read(
+                          length
+                      )
+
+                      data = json.loads(
+                          body.decode("utf-8")
+                      )
+
+                      pin = str(
+                          data.get(
+                              "pin",
+                              ""
+                          )
+                      ).strip()
+
+                      if (
+                          not pin.isdigit()
+                          or len(pin) != 4
+                      ):
+
+                          self.send_json(
+                              400,
+                              {
+                                  "success": False,
+                                  "error":
+                                    "PIN must be 4 digits."
+                              }
+                          )
+
+                          return
+
+                      print(
+                          "",
+                          flush=True
+                      )
+
+                      print(
+                          "================================",
+                          flush=True
+                      )
+
+                      print(
+                          "PIN RECEIVED:",
+                          pin,
+                          flush=True
+                      )
+
+                      print(
+                          "Sending PIN to Sunshine...",
+                          flush=True
+                      )
+
+                      print(
+                          "================================",
+                          flush=True
+                      )
+
+                      # ----------------------------------------------
+                      # Basic authentication
+                      # ----------------------------------------------
+
+                      credentials = (
+                          SUNSHINE_USER
+                          + ":"
+                          + SUNSHINE_PASSWORD
+                      )
+
+                      auth = base64.b64encode(
+                          credentials.encode(
+                              "utf-8"
+                          )
+                      ).decode("ascii")
+
+                      payload = json.dumps(
+                          {
+                              "pin": pin,
+                              "name": "iPhone"
+                          }
+                      ).encode("utf-8")
+
+                      request = urllib.request.Request(
+                          SUNSHINE_URL,
+                          data=payload,
+                          method="POST"
+                      )
+
+                      request.add_header(
+                          "Content-Type",
+                          "application/json"
+                      )
+
+                      request.add_header(
+                          "Authorization",
+                          "Basic " + auth
+                      )
+
+                      # Sunshine uses a
+                      # self-signed certificate.
+
+                      context = (
+                          ssl._create_unverified_context()
+                      )
+
+                      try:
+
+                          with urllib.request.urlopen(
+                              request,
+                              context=context,
+                              timeout=15
+                          ) as response:
+
+                              result =
+                                  response.read().decode(
+                                      "utf-8",
+                                      errors="replace"
+                                  )
+
+                          print(
+                              "Sunshine accepted the PIN.",
+                              flush=True
+                          )
+
+                          self.send_json(
+                              200,
+                              {
+                                  "success": True,
+                                  "message":
+                                    "PIN submitted."
+                              }
+                          )
+
+                      except Exception as e:
+
+                          print(
+                              "Sunshine API error:",
+                              str(e),
+                              flush=True
+                          )
+
+                          self.send_json(
+                              400,
+                              {
+                                  "success": False,
+                                  "error": str(e)
+                              }
+                          )
+
+                  except Exception as e:
+
+                      print(
+                          "Server error:",
+                          str(e),
+                          flush=True
+                      )
+
+                      self.send_json(
+                          500,
+                          {
+                              "success": False,
+                              "error": str(e)
+                          }
+                      )
+
+
+          print(
+              "======================================",
+              flush=True
+          )
+
+          print(
+              "Sunshine PIN server started.",
+              flush=True
+          )
+
+          print(
+              "Listening on 0.0.0.0:8080",
+              flush=True
+          )
+
+          print(
+              "======================================",
+              flush=True
+          )
+
+
+          server = HTTPServer(
+              ("0.0.0.0", 8080),
+              Handler
+          )
+
+          server.serve_forever()
+          '@ | Set-Content `
+            -Path "$pinPage\server.py" `
+            -Encoding UTF8
+
+          Write-Host "PIN server files created."
+
+
+      # ============================================================
+      # 13. OPEN TAILSCALE FIREWALL FOR PIN PAGE
+      # ============================================================
+      - name: Configure PIN Page Firewall 🔥
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          netsh advfirewall firewall delete rule `
+            name="Sunshine-PIN-Tailscale" 2>$null
+
+          netsh advfirewall firewall add rule `
+            name="Sunshine-PIN-Tailscale" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=8080 `
+            remoteip=100.64.0.0/10 `
+            profile=any
+
+          Write-Host "PIN page firewall configured."
+
+
+      # ============================================================
+      # 14. START PIN SERVER
+      # ============================================================
+      - name: Start PIN Page 📱
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $python = Get-Command python.exe `
+            -ErrorAction SilentlyContinue
+
+          if (-not $python) {
+
+            Write-Host "Python not found."
+
+            Write-Host "Installing Python..."
+
+            winget install `
+              Python.Python.3.12 `
+              --silent `
+              --accept-package-agreements `
+              --accept-source-agreements `
+              --disable-interactivity
+
+            $python = Get-Command python.exe `
+              -ErrorAction SilentlyContinue
+          }
+
+          if (-not $python) {
+            throw "Python could not be installed."
+          }
+
+          Write-Host "Starting PIN page..."
+
+          Start-Process `
+            -FilePath "python.exe" `
+            -ArgumentList `
+              "`"C:\sunshine-pin\server.py`"" `
+            -WindowStyle Hidden
+
+          Start-Sleep -Seconds 5
+
+          $check = Test-NetConnection `
+            -ComputerName "127.0.0.1" `
+            -Port 8080 `
+            -WarningAction SilentlyContinue
+
+          if (-not $check.TcpTestSucceeded) {
+
+            throw "PIN page failed to start."
+          }
+
+          Write-Host ""
+          Write-Host "=============================================="
+          Write-Host "           SUNSHINE PIN PAGE READY"
+          Write-Host "=============================================="
+          Write-Host ""
+
+          Write-Host "Open this on your iPhone:"
+          Write-Host ""
+
+          Write-Host "http://$env:TAILSCALE_IP:8080"
+
+          Write-Host ""
+
+          Write-Host "Moonlight PC Address:"
+          Write-Host $env:TAILSCALE_IP
+
+          Write-Host ""
+
+          Write-Host "=============================================="
+
+
+      # ============================================================
+      # 15. FINAL ACCESS INFORMATION
+      # ============================================================
+      - name: Final Access Information ✨
         shell: powershell
         run: |
 
@@ -573,16 +1295,22 @@ jobs:
           Write-Host "======================================================"
           Write-Host ""
 
-          Write-Host "RDP"
+          Write-Host "TAILSCALE"
           Write-Host "------------------------------------------------------"
           Write-Host "IP:"
-          Write-Host "$env:TAILSCALE_IP"
+          Write-Host $env:TAILSCALE_IP
+          Write-Host ""
+
+          Write-Host "RDP"
+          Write-Host "------------------------------------------------------"
+          Write-Host "Address:"
+          Write-Host $env:TAILSCALE_IP
           Write-Host ""
           Write-Host "Username:"
-          Write-Host "$env:RDP_USER"
+          Write-Host $env:RDP_USER
           Write-Host ""
           Write-Host "Password:"
-          Write-Host "$env:RDP_PASSWORD"
+          Write-Host $env:RDP_PASSWORD
           Write-Host ""
 
           Write-Host "SUNSHINE"
@@ -591,29 +1319,37 @@ jobs:
           Write-Host "https://$env:TAILSCALE_IP:47990"
           Write-Host ""
           Write-Host "Username:"
-          Write-Host "$env:SUNSHINE_USER"
+          Write-Host $env:SUNSHINE_USER
           Write-Host ""
           Write-Host "Password:"
-          Write-Host "$env:SUNSHINE_PASSWORD"
+          Write-Host $env:SUNSHINE_PASSWORD
           Write-Host ""
 
           Write-Host "MOONLIGHT"
           Write-Host "------------------------------------------------------"
           Write-Host "PC Address:"
-          Write-Host "$env:TAILSCALE_IP"
+          Write-Host $env:TAILSCALE_IP
           Write-Host ""
-          Write-Host "Add the IP above to Moonlight."
-          Write-Host "Moonlight will generate the pairing PIN."
-          Write-Host "Enter that PIN in Sunshine."
+
+          Write-Host "PIN PAGE"
+          Write-Host "------------------------------------------------------"
+          Write-Host "Open on iPhone:"
+          Write-Host ""
+          Write-Host "http://$env:TAILSCALE_IP:8080"
+          Write-Host ""
+
+          Write-Host "Enter the PIN shown by Moonlight."
           Write-Host ""
 
           Write-Host "======================================================"
           Write-Host "                 RUNNER IS ACTIVE"
           Write-Host "======================================================"
+          Write-Host ""
 
           while ($true) {
 
-            Write-Host "[$(Get-Date)] Runner Active..."
+            Write-Host `
+              "[$(Get-Date)] Runner Active..."
 
             Start-Sleep -Seconds 300
           }
