@@ -80,6 +80,7 @@ jobs:
           $upper   = [char[]](65..90)
           $lower   = [char[]](97..122)
           $numbers = [char[]](48..57)
+
           $special = (
             [char[]](33..47) +
             [char[]](58..64) +
@@ -133,20 +134,30 @@ jobs:
 
           $tsVersion = "1.90.6"
 
-          $tsUrl = `
-            "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
 
           $installer = "$env:TEMP\tailscale.msi"
 
           Write-Host "Downloading Tailscale..."
 
-          Start-BitsTransfer `
-            -Source $tsUrl `
-            -Destination $installer
+          curl.exe `
+            -L `
+            --retry 5 `
+            --retry-delay 5 `
+            --connect-timeout 30 `
+            --max-time 300 `
+            -o "$installer" `
+            "$tsUrl"
 
           if (-not (Test-Path $installer)) {
             throw "Tailscale download failed."
           }
+
+          if ((Get-Item $installer).Length -lt 1000000) {
+            throw "Tailscale installer appears to be invalid."
+          }
+
+          Write-Host "Installing Tailscale..."
 
           Start-Process `
             msiexec.exe `
@@ -200,6 +211,7 @@ jobs:
             }
 
             Write-Host "Waiting for Tailscale IP..."
+
             Start-Sleep -Seconds 3
           }
 
@@ -213,6 +225,98 @@ jobs:
 
 
       # ============================================================
+      # DOWNLOAD SUNSHINE
+      # ============================================================
+      - name: Download Sunshine ☀️
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Finding latest Sunshine release..."
+
+          $apiUrl = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+
+          $release = Invoke-RestMethod `
+            -Uri $apiUrl `
+            -Headers @{
+              "User-Agent" = "GitHub-Actions-Sunshine"
+              "Accept" = "application/vnd.github+json"
+            }
+
+          $assets = $release.assets
+
+          $asset = $assets |
+            Where-Object {
+              $_.name -match 'Windows.*AMD64.*\.msi$'
+            } |
+            Select-Object -First 1
+
+          if (-not $asset) {
+
+            Write-Host "Available Sunshine assets:"
+
+            $assets |
+              ForEach-Object {
+                Write-Host $_.name
+              }
+
+            throw "Could not find Sunshine Windows AMD64 MSI."
+          }
+
+          $sunshineUrl = $asset.browser_download_url
+          $installer = "$env:TEMP\Sunshine.msi"
+
+          Write-Host ""
+          Write-Host "Latest Sunshine:"
+          Write-Host $release.tag_name
+
+          Write-Host ""
+          Write-Host "Downloading:"
+          Write-Host $asset.name
+
+          Write-Host ""
+          Write-Host "Download URL:"
+          Write-Host $sunshineUrl
+
+          # ========================================================
+          # CURL WITH RETRIES
+          # ========================================================
+
+          curl.exe `
+            -L `
+            --fail `
+            --retry 10 `
+            --retry-all-errors `
+            --retry-delay 5 `
+            --connect-timeout 30 `
+            --max-time 600 `
+            -A "Mozilla/5.0 GitHub-Actions" `
+            -o "$installer" `
+            "$sunshineUrl"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "curl failed to download Sunshine. Exit code: $LASTEXITCODE"
+          }
+
+          if (-not (Test-Path $installer)) {
+            throw "Sunshine installer was not downloaded."
+          }
+
+          $size = (Get-Item $installer).Length
+
+          Write-Host ""
+          Write-Host "Downloaded Sunshine size: $size bytes"
+
+          if ($size -lt 5000000) {
+            throw "Downloaded Sunshine file is suspiciously small."
+          }
+
+          "SUNSHINE_INSTALLER=$installer" >> $env:GITHUB_ENV
+
+          Write-Host "Sunshine download completed successfully."
+
+
+      # ============================================================
       # INSTALL SUNSHINE
       # ============================================================
       - name: Install Sunshine ☀️
@@ -220,42 +324,39 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $sunshineVersion = "2026.527.25539"
-
-          $sunshineUrl = `
-            "https://github.com/LizardByte/Sunshine/releases/download/v$sunshineVersion/Sunshine-Windows-AMD64-installer.msi"
-
-          $installer = "$env:TEMP\Sunshine.msi"
-
-          Write-Host "Downloading Sunshine $sunshineVersion..."
-
-          Invoke-WebRequest `
-            -Uri $sunshineUrl `
-            -OutFile $installer `
-            -UseBasicParsing
+          $installer = "$env:SUNSHINE_INSTALLER"
 
           if (-not (Test-Path $installer)) {
-            throw "Sunshine download failed."
+            throw "Sunshine installer not found."
           }
 
           Write-Host "Installing Sunshine..."
 
-          Start-Process `
-            msiexec.exe `
+          $process = Start-Process `
+            -FilePath "msiexec.exe" `
             -ArgumentList `
               "/i",
               "`"$installer`"",
               "/qn",
-              "/norestart" `
+              "/norestart",
+              "/L*v",
+              "`"$env:TEMP\sunshine-install.log`"" `
             -Wait `
+            -PassThru `
             -NoNewWindow
+
+          if ($process.ExitCode -ne 0) {
+            Write-Host "Sunshine MSI installation failed."
+            Get-Content "$env:TEMP\sunshine-install.log" -Tail 80
+            throw "Sunshine installation failed with exit code $($process.ExitCode)."
+          }
 
           Remove-Item `
             $installer `
             -Force `
             -ErrorAction SilentlyContinue
 
-          Write-Host "Sunshine installed."
+          Write-Host "Sunshine installed successfully."
 
 
       # ============================================================
@@ -267,21 +368,31 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
-          $configDir   = "C:\Program Files\Sunshine\config"
-          $configFile  = "$configDir\sunshine.conf"
 
           if (-not (Test-Path $sunshineExe)) {
-            throw "Sunshine executable was not found."
+
+            $possible = Get-ChildItem `
+              "C:\Program Files" `
+              -Filter "sunshine.exe" `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+
+            if ($possible) {
+              $sunshineExe = $possible.FullName
+            }
           }
 
-          New-Item `
-            -ItemType Directory `
-            -Path $configDir `
-            -Force | Out-Null
+          if (-not (Test-Path $sunshineExe)) {
+            throw "Sunshine executable was not found after installation."
+          }
 
-          # ----------------------------------------------------------
-          # Generate Sunshine credentials
-          # ----------------------------------------------------------
+          Write-Host "Sunshine executable:"
+          Write-Host $sunshineExe
+
+          # ========================================================
+          # GENERATE SUNSHINE USERNAME/PASSWORD
+          # ========================================================
 
           $sunUser = "sunshine"
 
@@ -297,45 +408,33 @@ jobs:
             }
           )
 
-          # ----------------------------------------------------------
-          # Configure Web UI access through Tailscale
-          # ----------------------------------------------------------
-
-          @"
-          origin_web_ui_allowed = wan
-          csrf_allowed_origins = https://$env:TAILSCALE_IP:47990
-          port = 47989
-          "@ | Set-Content `
-            -Path $configFile `
-            -Encoding UTF8
-
-          Write-Host "Sunshine configuration created."
-
-          # ----------------------------------------------------------
-          # Stop any automatically installed Sunshine service
-          # ----------------------------------------------------------
+          # ========================================================
+          # STOP SERVICE BEFORE CONFIGURATION
+          # ========================================================
 
           Stop-Service `
             -Name "Sunshine" `
             -Force `
             -ErrorAction SilentlyContinue
 
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 3
 
-          # ----------------------------------------------------------
-          # Create Sunshine Web UI credentials
-          # ----------------------------------------------------------
+          # ========================================================
+          # CREATE SUNSHINE CREDENTIALS
+          # ========================================================
 
-          Write-Host "Creating Sunshine credentials..."
+          Write-Host "Creating Sunshine Web UI credentials..."
 
           & $sunshineExe `
-            --creds $sunUser $sunPassword
+            --creds `
+            $sunUser `
+            $sunPassword
 
-          Start-Sleep -Seconds 2
+          Start-Sleep -Seconds 3
 
-          # ----------------------------------------------------------
-          # Firewall - Tailscale only
-          # ----------------------------------------------------------
+          # ========================================================
+          # FIREWALL
+          # ========================================================
 
           netsh advfirewall firewall delete rule `
             name="Sunshine-Tailscale-Web" 2>$null
@@ -373,38 +472,45 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          # ----------------------------------------------------------
-          # Start Sunshine manually
-          # ----------------------------------------------------------
+          # ========================================================
+          # START SUNSHINE
+          # ========================================================
 
           Write-Host "Starting Sunshine..."
 
-          Start-Process `
-            -FilePath $sunshineExe `
-            -WorkingDirectory "C:\Program Files\Sunshine" `
-            -WindowStyle Hidden
+          Start-Service `
+            -Name "Sunshine" `
+            -ErrorAction SilentlyContinue
 
           Start-Sleep -Seconds 8
 
-          # ----------------------------------------------------------
-          # Save credentials for following step
-          # ----------------------------------------------------------
+          $service = Get-Service `
+            -Name "Sunshine" `
+            -ErrorAction SilentlyContinue
 
+          if ($service) {
+
+            Write-Host "Sunshine service status: $($service.Status)"
+
+          }
+
+          # Save variables
           "SUNSHINE_USER=$sunUser" >> $env:GITHUB_ENV
           "SUNSHINE_PASSWORD=$sunPassword" >> $env:GITHUB_ENV
+          "SUNSHINE_EXE=$sunshineExe" >> $env:GITHUB_ENV
 
           Write-Host ""
           Write-Host "=============================================="
-          Write-Host "           SUNSHINE IS READY"
+          Write-Host "SUNSHINE CONFIGURED"
           Write-Host "=============================================="
           Write-Host ""
-          Write-Host "Sunshine Username:"
-          Write-Host "$sunUser"
+          Write-Host "Username:"
+          Write-Host $sunUser
           Write-Host ""
-          Write-Host "Sunshine Password:"
-          Write-Host "$sunPassword"
+          Write-Host "Password:"
+          Write-Host $sunPassword
           Write-Host ""
-          Write-Host "Sunshine Web UI:"
+          Write-Host "Web UI:"
           Write-Host "https://$env:TAILSCALE_IP:47990"
           Write-Host ""
           Write-Host "=============================================="
@@ -413,28 +519,49 @@ jobs:
       # ============================================================
       # CHECK SUNSHINE
       # ============================================================
-      - name: Check Sunshine Web UI 🔎
+      - name: Check Sunshine 🔎
         shell: powershell
         run: |
-          Write-Host "Checking Sunshine..."
+          Write-Host "Waiting for Sunshine Web UI..."
 
-          Start-Sleep -Seconds 5
+          $success = $false
 
-          $test = Test-NetConnection `
-            -ComputerName "127.0.0.1" `
-            -Port 47990 `
-            -WarningAction SilentlyContinue
+          for ($i = 0; $i -lt 20; $i++) {
 
-          if ($test.TcpTestSucceeded) {
-            Write-Host "Sunshine Web UI is listening on port 47990."
+            $check = Test-NetConnection `
+              -ComputerName "127.0.0.1" `
+              -Port 47990 `
+              -WarningAction SilentlyContinue
+
+            if ($check.TcpTestSucceeded) {
+
+              $success = $true
+              break
+
+            }
+
+            Write-Host "Sunshine is not ready yet..."
+            Start-Sleep -Seconds 3
+          }
+
+          if ($success) {
+
+            Write-Host ""
+            Write-Host "Sunshine Web UI is ONLINE."
+            Write-Host "Port: 47990"
+
           }
           else {
-            Write-Host "WARNING: Sunshine Web UI is not responding yet."
+
+            Write-Host ""
+            Write-Host "WARNING: Sunshine Web UI did not respond on port 47990."
+            Write-Host "The runner will continue."
+
           }
 
 
       # ============================================================
-      # DISPLAY ALL ACCESS INFORMATION
+      # SHOW ACCESS INFORMATION
       # ============================================================
       - name: Display Access Information ✨
         shell: powershell
@@ -472,15 +599,16 @@ jobs:
 
           Write-Host "MOONLIGHT"
           Write-Host "------------------------------------------------------"
-          Write-Host "Add this PC:"
+          Write-Host "PC Address:"
           Write-Host "$env:TAILSCALE_IP"
           Write-Host ""
+          Write-Host "Add the IP above to Moonlight."
           Write-Host "Moonlight will generate the pairing PIN."
-          Write-Host "Enter that PIN inside Sunshine -> PIN."
+          Write-Host "Enter that PIN in Sunshine."
           Write-Host ""
 
           Write-Host "======================================================"
-          Write-Host "              RUNNER ACTIVE - 6 HOURS"
+          Write-Host "                 RUNNER IS ACTIVE"
           Write-Host "======================================================"
 
           while ($true) {
