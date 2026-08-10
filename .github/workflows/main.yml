@@ -1209,68 +1209,174 @@ jobs:
           Write-Host "PIN page firewall configured."
 
 
-      # ============================================================
-      # 14. START PIN SERVER
+            # ============================================================
+      # START PIN PAGE
       # ============================================================
       - name: Start PIN Page 📱
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $python = Get-Command python.exe `
-            -ErrorAction SilentlyContinue
-
-          if (-not $python) {
-
-            Write-Host "Python not found."
-
-            Write-Host "Installing Python..."
-
-            winget install `
-              Python.Python.3.12 `
-              --silent `
-              --accept-package-agreements `
-              --accept-source-agreements `
-              --disable-interactivity
-
-            $python = Get-Command python.exe `
-              -ErrorAction SilentlyContinue
-          }
-
-          if (-not $python) {
-            throw "Python could not be installed."
-          }
-
           Write-Host "Starting PIN page..."
 
-          Start-Process `
-            -FilePath "python.exe" `
+          # Find Python
+          $pythonPath = $null
+
+          $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+
+          if ($pythonCommand) {
+              $pythonPath = $pythonCommand.Source
+          }
+
+          # GitHub Windows runners normally have Python available,
+          # but install it if it is missing.
+          if (-not $pythonPath) {
+
+              Write-Host "Python was not found. Installing Python..."
+
+              winget install `
+                --id Python.Python.3.12 `
+                --exact `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements `
+                --disable-interactivity
+
+              Start-Sleep -Seconds 5
+
+              $pythonCommand = Get-Command python.exe `
+                -ErrorAction SilentlyContinue
+
+              if ($pythonCommand) {
+                  $pythonPath = $pythonCommand.Source
+              }
+          }
+
+          if (-not $pythonPath) {
+              throw "Python executable could not be found."
+          }
+
+          Write-Host "Python:"
+          Write-Host $pythonPath
+
+          # --------------------------------------------------------
+          # Test the Python server BEFORE running it in background.
+          # This exposes syntax/runtime errors directly in Actions.
+          # --------------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Checking PIN server syntax..."
+
+          & $pythonPath -m py_compile `
+            "C:\sunshine-pin\server.py"
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "PIN server contains a Python syntax error."
+          }
+
+          Write-Host "Python syntax OK."
+
+          # --------------------------------------------------------
+          # Start server
+          # --------------------------------------------------------
+
+          Write-Host ""
+          Write-Host "Launching PIN server..."
+
+          $process = Start-Process `
+            -FilePath $pythonPath `
             -ArgumentList `
               "`"C:\sunshine-pin\server.py`"" `
+            -WorkingDirectory `
+              "C:\sunshine-pin" `
+            -PassThru `
             -WindowStyle Hidden
 
           Start-Sleep -Seconds 5
 
-          $check = Test-NetConnection `
-            -ComputerName "127.0.0.1" `
-            -Port 8080 `
-            -WarningAction SilentlyContinue
+          # --------------------------------------------------------
+          # Check process
+          # --------------------------------------------------------
 
-          if (-not $check.TcpTestSucceeded) {
+          $running = Get-Process `
+            -Id $process.Id `
+            -ErrorAction SilentlyContinue
 
-            throw "PIN page failed to start."
+          if (-not $running) {
+
+              Write-Host ""
+              Write-Host "PIN server exited immediately."
+
+              Write-Host ""
+              Write-Host "Running server directly to show the error:"
+              Write-Host "------------------------------------------------"
+
+              & $pythonPath `
+                "C:\sunshine-pin\server.py"
+
+              throw "PIN server failed to start."
           }
 
+          # --------------------------------------------------------
+          # Check port
+          # --------------------------------------------------------
+
           Write-Host ""
-          Write-Host "=============================================="
-          Write-Host "           SUNSHINE PIN PAGE READY"
-          Write-Host "=============================================="
+          Write-Host "Checking port 8080..."
+
+          $ready = $false
+
+          for ($i = 0; $i -lt 20; $i++) {
+
+              $check = Test-NetConnection `
+                -ComputerName "127.0.0.1" `
+                -Port 8080 `
+                -WarningAction SilentlyContinue
+
+              if ($check.TcpTestSucceeded) {
+
+                  $ready = $true
+                  break
+              }
+
+              Write-Host `
+                "Waiting for PIN server... ($($i + 1)/20)"
+
+              Start-Sleep -Seconds 2
+          }
+
+          if (-not $ready) {
+
+              Write-Host ""
+              Write-Host "PIN server process is running, but port 8080 is not listening."
+
+              Write-Host ""
+              Write-Host "Server process:"
+              Get-Process -Id $process.Id `
+                -ErrorAction SilentlyContinue
+
+              Write-Host ""
+              Write-Host "Port check:"
+              netstat -ano | findstr ":8080"
+
+              throw "PIN page failed to listen on port 8080."
+          }
+
+          # --------------------------------------------------------
+          # SUCCESS
+          # --------------------------------------------------------
+
+          Write-Host ""
+          Write-Host "======================================================"
+          Write-Host "             SUNSHINE PIN PAGE READY"
+          Write-Host "======================================================"
           Write-Host ""
 
           Write-Host "Open this on your iPhone:"
           Write-Host ""
 
-          Write-Host "http://$env:TAILSCALE_IP:8080"
+          Write-Host `
+            "http://$env:TAILSCALE_IP:8080"
 
           Write-Host ""
 
@@ -1279,9 +1385,11 @@ jobs:
 
           Write-Host ""
 
-          Write-Host "=============================================="
+          Write-Host "PIN:"
+          Write-Host "Get the PIN from Moonlight and enter it on the page."
 
-
+          Write-Host ""
+          Write-Host "======================================================"
       # ============================================================
       # 15. FINAL ACCESS INFORMATION
       # ============================================================
