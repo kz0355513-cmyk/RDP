@@ -60,7 +60,7 @@ jobs:
 
           $timeout = (Get-Date).AddSeconds(30)
 
-          while ((Get-Service -Name TermService).Status -ne "Running") {
+          while ((Get-Service TermService).Status -ne "Running") {
 
             if ((Get-Date) -gt $timeout) {
               throw "TermService failed to start."
@@ -80,8 +80,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $upper   = [char[]](65..90)
-          $lower   = [char[]](97..122)
+          $upper = [char[]](65..90)
+          $lower = [char[]](97..122)
           $numbers = [char[]](48..57)
 
           $special = (
@@ -93,14 +93,13 @@ jobs:
 
           $passwordChars = @()
 
-          $passwordChars += $upper   | Get-Random -Count 4
-          $passwordChars += $lower   | Get-Random -Count 4
+          $passwordChars += $upper | Get-Random -Count 4
+          $passwordChars += $lower | Get-Random -Count 4
           $passwordChars += $numbers | Get-Random -Count 4
           $passwordChars += $special | Get-Random -Count 4
 
           $password = -join (
-            $passwordChars |
-            Sort-Object { Get-Random }
+            $passwordChars | Sort-Object { Get-Random }
           )
 
           $securePassword = ConvertTo-SecureString `
@@ -135,10 +134,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $tsVersion = "1.90.6"
+          $version = "1.90.6"
 
-          $tsUrl = `
-            "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-$version-amd64.msi"
 
           $installer = "$env:TEMP\tailscale.msi"
 
@@ -147,20 +145,16 @@ jobs:
           curl.exe `
             -L `
             --fail `
-            --retry 8 `
+            --retry 10 `
             --retry-all-errors `
             --retry-delay 5 `
             --connect-timeout 30 `
             --max-time 300 `
             -o "$installer" `
-            "$tsUrl"
+            "$url"
 
           if ($LASTEXITCODE -ne 0) {
             throw "Tailscale download failed."
-          }
-
-          if (-not (Test-Path $installer)) {
-            throw "Tailscale installer was not downloaded."
           }
 
           Start-Process `
@@ -202,14 +196,15 @@ jobs:
 
           for ($i = 0; $i -lt 20; $i++) {
 
-            $result = & $tailscale ip -4 2>$null
+            $ips = & $tailscale ip -4 2>$null
 
-            foreach ($line in $result) {
+            foreach ($ip in $ips) {
 
-              $line = $line.Trim()
+              $ip = $ip.Trim()
 
-              if ($line -match '^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-                $tsIP = $line
+              if ($ip -match '^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+
+                $tsIP = $ip
                 break
               }
             }
@@ -227,21 +222,18 @@ jobs:
             throw "Tailscale IP was not assigned."
           }
 
-          # IMPORTANT:
-          # Save the IP for every following GitHub Actions step.
           "TAILSCALE_IP=$tsIP" | Out-File `
-            -FilePath $env:GITHUB_ENV `
+            $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
 
           Write-Host ""
-          Write-Host "======================================"
-          Write-Host "TAILSCALE IP: $tsIP"
-          Write-Host "======================================"
+          Write-Host "Tailscale IP:"
+          Write-Host $tsIP
 
 
       # ============================================================
-      # 5. DOWNLOAD LATEST SUNSHINE
+      # 5. DOWNLOAD SUNSHINE
       # ============================================================
       - name: Download Sunshine ☀️
         shell: powershell
@@ -250,39 +242,41 @@ jobs:
 
           Write-Host "Finding latest Sunshine release..."
 
-          $apiUrl = `
-            "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+          $headers = @{
+            "User-Agent" = "GitHub-Actions-Sunshine"
+            "Accept" = "application/vnd.github+json"
+          }
 
           $release = Invoke-RestMethod `
-            -Uri $apiUrl `
-            -Headers @{
-              "User-Agent" = "GitHub-Actions-Sunshine"
-              "Accept" = "application/vnd.github+json"
-            }
+            -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest" `
+            -Headers $headers
 
-          Write-Host "Latest release: $($release.tag_name)"
+          Write-Host "Latest Sunshine:"
+          Write-Host $release.tag_name
 
           $asset = $release.assets |
             Where-Object {
-              $_.name -match '(?i)windows.*(amd64|x64).*\.msi$'
+              $_.name -eq "sunshine-windows-installer.exe"
             } |
             Select-Object -First 1
 
           if (-not $asset) {
 
-            Write-Host "Available assets:"
+            Write-Host ""
+            Write-Host "Available Windows assets:"
 
             $release.assets |
+              Where-Object {
+                $_.name -match "(?i)windows"
+              } |
               ForEach-Object {
                 Write-Host $_.name
               }
 
-            throw "Could not find Sunshine Windows MSI."
+            throw "Sunshine Windows installer was not found."
           }
 
-          $sunshineUrl = $asset.browser_download_url
-
-          $installer = "$env:TEMP\Sunshine.msi"
+          $installer = "$env:TEMP\sunshine-installer.exe"
 
           Write-Host ""
           Write-Host "Downloading:"
@@ -291,21 +285,21 @@ jobs:
           curl.exe `
             -L `
             --fail `
-            --retry 10 `
+            --retry 12 `
             --retry-all-errors `
             --retry-delay 5 `
             --connect-timeout 30 `
-            --max-time 600 `
-            -A "Mozilla/5.0 GitHub-Actions" `
+            --max-time 900 `
+            -A "Mozilla/5.0" `
             -o "$installer" `
-            "$sunshineUrl"
+            "$($asset.browser_download_url)"
 
           if ($LASTEXITCODE -ne 0) {
             throw "Sunshine download failed."
           }
 
           if (-not (Test-Path $installer)) {
-            throw "Sunshine installer was not downloaded."
+            throw "Sunshine installer does not exist."
           }
 
           $size = (Get-Item $installer).Length
@@ -313,15 +307,13 @@ jobs:
           Write-Host "Downloaded size: $size bytes"
 
           if ($size -lt 5000000) {
-            throw "Sunshine installer appears invalid or incomplete."
+            throw "Sunshine installer appears incomplete."
           }
 
           "SUNSHINE_INSTALLER=$installer" | Out-File `
-            -FilePath $env:GITHUB_ENV `
+            $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
-
-          Write-Host "Sunshine download completed."
 
 
       # ============================================================
@@ -332,39 +324,20 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $installer = "$env:SUNSHINE_INSTALLER"
-
-          if (-not (Test-Path $installer)) {
-            throw "Sunshine installer not found."
-          }
+          $installer = $env:SUNSHINE_INSTALLER
 
           Write-Host "Installing Sunshine..."
 
           $process = Start-Process `
-            -FilePath "msiexec.exe" `
-            -ArgumentList `
-              "/i",
-              "`"$installer`"",
-              "/qn",
-              "/norestart",
-              "/L*v",
-              "`"$env:TEMP\sunshine-install.log`"" `
+            -FilePath $installer `
+            -ArgumentList "/S" `
             -Wait `
-            -PassThru `
-            -NoNewWindow
+            -PassThru
+
+          Write-Host "Installer exit code: $($process.ExitCode)"
 
           if ($process.ExitCode -ne 0) {
-
-            Write-Host "Sunshine installation failed."
-
-            if (Test-Path "$env:TEMP\sunshine-install.log") {
-              Get-Content `
-                "$env:TEMP\sunshine-install.log" `
-                -Tail 100
-            }
-
-            throw `
-              "Sunshine installation failed with exit code $($process.ExitCode)."
+            throw "Sunshine installer failed."
           }
 
           Remove-Item `
@@ -372,42 +345,70 @@ jobs:
             -Force `
             -ErrorAction SilentlyContinue
 
-          Write-Host "Sunshine installed successfully."
+          Write-Host "Sunshine installed."
 
 
       # ============================================================
-      # 7. FIND SUNSHINE + CREATE CREDENTIALS
+      # 7. FIND SUNSHINE
       # ============================================================
-      - name: Configure Sunshine 🔐
+      - name: Find Sunshine 🔎
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
+          $paths = @(
+            "C:\Program Files\Sunshine\sunshine.exe",
+            "C:\Program Files\Sunshine\tools\sunshine.exe",
+            "$env:ProgramFiles\Sunshine\sunshine.exe"
+          )
 
-          if (-not (Test-Path $sunshineExe)) {
+          $sunshineExe = $null
 
-            $possible = Get-ChildItem `
+          foreach ($path in $paths) {
+
+            if (Test-Path $path) {
+
+              $sunshineExe = $path
+              break
+            }
+          }
+
+          if (-not $sunshineExe) {
+
+            $found = Get-ChildItem `
               "C:\Program Files" `
               -Filter "sunshine.exe" `
               -Recurse `
               -ErrorAction SilentlyContinue |
               Select-Object -First 1
 
-            if ($possible) {
-              $sunshineExe = $possible.FullName
+            if ($found) {
+              $sunshineExe = $found.FullName
             }
           }
 
-          if (-not (Test-Path $sunshineExe)) {
-            throw "Sunshine executable was not found."
+          if (-not $sunshineExe) {
+            throw "sunshine.exe was not found."
           }
 
-          Write-Host "Sunshine:"
+          "SUNSHINE_EXE=$sunshineExe" | Out-File `
+            $env:GITHUB_ENV `
+            -Append `
+            -Encoding utf8
+
+          Write-Host "Sunshine executable:"
           Write-Host $sunshineExe
 
-          # Generate Sunshine username/password
-          $sunUser = "sunshine"
+
+      # ============================================================
+      # 8. CONFIGURE SUNSHINE CREDENTIALS
+      # ============================================================
+      - name: Configure Sunshine Credentials 🔐
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $username = "sunshine"
 
           $chars = (
             [char[]](65..90) +
@@ -415,42 +416,36 @@ jobs:
             [char[]](48..57)
           )
 
-          $sunPassword = -join (
+          $password = -join (
             1..20 | ForEach-Object {
               $chars | Get-Random
             }
           )
 
-          # Stop service before changing credentials
-          Stop-Service `
-            -Name "Sunshine" `
+          Write-Host "Configuring Sunshine credentials..."
+
+          # Stop Sunshine if it is already running.
+          Stop-Process `
+            -Name "sunshine" `
             -Force `
             -ErrorAction SilentlyContinue
 
           Start-Sleep -Seconds 3
 
-          Write-Host "Creating Sunshine credentials..."
-
-          & $sunshineExe `
+          & $env:SUNSHINE_EXE `
             --creds `
-            $sunUser `
-            $sunPassword
+            $username `
+            $password
 
           Start-Sleep -Seconds 3
 
-          # Save credentials for later steps
-          "SUNSHINE_USER=$sunUser" | Out-File `
-            -FilePath $env:GITHUB_ENV `
+          "SUNSHINE_USER=$username" | Out-File `
+            $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
 
-          "SUNSHINE_PASSWORD=$sunPassword" | Out-File `
-            -FilePath $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          "SUNSHINE_EXE=$sunshineExe" | Out-File `
-            -FilePath $env:GITHUB_ENV `
+          "SUNSHINE_PASSWORD=$password" | Out-File `
+            $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
 
@@ -458,7 +453,7 @@ jobs:
 
 
       # ============================================================
-      # 8. SUNSHINE FIREWALL
+      # 9. SUNSHINE FIREWALL
       # ============================================================
       - name: Configure Sunshine Firewall 🔥
         shell: powershell
@@ -501,693 +496,594 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          Write-Host "Sunshine firewall rules configured."
+          Write-Host "Firewall configured."
 
 
       # ============================================================
-      # 9. START SUNSHINE
+      # 10. START SUNSHINE
       # ============================================================
       - name: Start Sunshine ☀️
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "Starting Sunshine service..."
+          Write-Host "Starting Sunshine..."
 
-          Start-Service `
-            -Name "Sunshine" `
-            -ErrorAction SilentlyContinue
+          Start-Process `
+            -FilePath $env:SUNSHINE_EXE `
+            -WorkingDirectory (
+              Split-Path $env:SUNSHINE_EXE
+            ) `
+            -WindowStyle Hidden
 
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 10
 
-          $service = Get-Service `
-            -Name "Sunshine" `
-            -ErrorAction SilentlyContinue
+          $check = Test-NetConnection `
+            -ComputerName "127.0.0.1" `
+            -Port 47990 `
+            -WarningAction SilentlyContinue
 
-          if ($service) {
-            Write-Host "Sunshine status: $($service.Status)"
-          }
-
-          if (-not $service) {
-            Write-Host "Sunshine service was not found."
-            Write-Host "Starting sunshine.exe manually..."
-
-            Start-Process `
-              -FilePath $env:SUNSHINE_EXE `
-              -WorkingDirectory "C:\Program Files\Sunshine" `
-              -WindowStyle Hidden
-
-            Start-Sleep -Seconds 8
-          }
-
-
-      # ============================================================
-      # 10. CHECK SUNSHINE
-      # ============================================================
-      - name: Check Sunshine 🔎
-        shell: powershell
-        run: |
-          Write-Host "Checking Sunshine Web UI..."
-
-          $success = $false
-
-          for ($i = 0; $i -lt 20; $i++) {
-
-            $check = Test-NetConnection `
-              -ComputerName "127.0.0.1" `
-              -Port 47990 `
-              -WarningAction SilentlyContinue
-
-            if ($check.TcpTestSucceeded) {
-
-              $success = $true
-              break
-            }
-
-            Write-Host "Waiting for Sunshine..."
-            Start-Sleep -Seconds 3
-          }
-
-          if (-not $success) {
+          if (-not $check.TcpTestSucceeded) {
 
             Write-Host ""
-            Write-Host "WARNING:"
-            Write-Host "Sunshine Web UI is not responding on port 47990."
+            Write-Host "Sunshine did not open port 47990."
 
+            throw "Sunshine Web UI is not responding."
           }
-          else {
 
-            Write-Host ""
-            Write-Host "Sunshine Web UI is ONLINE."
-
-          }
+          Write-Host ""
+          Write-Host "Sunshine Web UI is ONLINE."
 
 
       # ============================================================
-      # 11. CREATE PIN WEB PAGE
+      # 11. CREATE PIN PAGE
       # ============================================================
       - name: Create PIN Page 📱
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $pinPage = "C:\sunshine-pin"
+          $folder = "C:\sunshine-pin"
 
           New-Item `
             -ItemType Directory `
-            -Path $pinPage `
+            -Path $folder `
             -Force | Out-Null
 
-          # ========================================================
-          # HTML
-          # ========================================================
+          # --------------------------------------------------------
+          # HTML PAGE
+          # --------------------------------------------------------
 
-          @'
+          $html = @'
           <!DOCTYPE html>
+
           <html>
 
           <head>
 
-            <meta
-              name="viewport"
-              content="width=device-width, initial-scale=1"
-            >
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+          >
 
-            <title>Sunshine PIN</title>
+          <title>Sunshine PIN</title>
 
-            <style>
+          <style>
 
-              * {
-                box-sizing: border-box;
-              }
+          * {
+            box-sizing: border-box;
+          }
 
-              body {
+          body {
 
-                margin: 0;
+            margin: 0;
 
-                min-height: 100vh;
+            min-height: 100vh;
 
-                display: flex;
+            display: flex;
 
-                justify-content: center;
+            justify-content: center;
 
-                align-items: center;
+            align-items: center;
 
-                background: #101010;
+            background: #101010;
 
-                color: white;
+            color: white;
 
-                font-family:
-                  -apple-system,
-                  BlinkMacSystemFont,
-                  "Segoe UI",
-                  Arial,
-                  sans-serif;
-              }
+            font-family:
+              -apple-system,
+              BlinkMacSystemFont,
+              "Segoe UI",
+              Arial,
+              sans-serif;
+          }
 
-              .card {
+          .card {
 
-                width: calc(100% - 32px);
+            width: calc(100% - 32px);
 
-                max-width: 400px;
+            max-width: 420px;
 
-                padding: 30px;
+            padding: 30px;
 
-                border-radius: 22px;
+            border-radius: 22px;
 
-                background: #1c1c1c;
+            background: #1d1d1d;
 
-                box-shadow:
-                  0 15px 50px rgba(0,0,0,.45);
+            box-shadow:
+              0 20px 60px rgba(0,0,0,.5);
 
-                text-align: center;
-              }
+            text-align: center;
+          }
 
-              h1 {
+          h1 {
 
-                margin-top: 0;
+            margin: 0 0 10px;
 
-                margin-bottom: 10px;
+            font-size: 28px;
+          }
 
-                font-size: 28px;
-              }
+          p {
 
-              p {
+            color: #aaa;
 
-                color: #aaa;
+            margin-bottom: 25px;
+          }
 
-                margin-bottom: 25px;
-              }
+          input {
 
-              input {
+            width: 100%;
 
-                width: 100%;
+            padding: 17px;
 
-                padding: 16px;
+            border: 0;
 
-                border: 0;
+            outline: none;
 
-                outline: none;
+            border-radius: 14px;
 
-                border-radius: 14px;
+            background: #2b2b2b;
 
-                background: #2b2b2b;
+            color: white;
 
-                color: white;
+            font-size: 30px;
 
-                font-size: 28px;
+            text-align: center;
 
-                text-align: center;
+            letter-spacing: 8px;
+          }
 
-                letter-spacing: 8px;
-              }
+          button {
 
-              button {
+            width: 100%;
 
-                width: 100%;
+            margin-top: 18px;
 
-                margin-top: 18px;
+            padding: 17px;
 
-                padding: 16px;
+            border: 0;
 
-                border: 0;
+            border-radius: 14px;
 
-                border-radius: 14px;
+            background: white;
 
-                background: white;
+            color: black;
 
-                color: black;
+            font-size: 18px;
 
-                font-size: 18px;
+            font-weight: 700;
 
-                font-weight: 700;
-              }
+            cursor: pointer;
+          }
 
-              button:active {
+          #status {
 
-                transform: scale(.98);
-              }
+            margin-top: 20px;
 
-              #status {
+            min-height: 25px;
 
-                margin-top: 20px;
+            color: #ccc;
+          }
 
-                min-height: 24px;
-
-                color: #ccc;
-              }
-
-            </style>
+          </style>
 
           </head>
 
           <body>
 
-            <div class="card">
+          <div class="card">
 
-              <h1>Sunshine PIN</h1>
+            <h1>Sunshine PIN</h1>
 
-              <p>
-                Enter the 4-digit PIN shown by Moonlight.
-              </p>
+            <p>
+              Enter the 4-digit PIN shown by Moonlight.
+            </p>
 
-              <form id="pinForm">
+            <form id="form">
 
-                <input
-                  id="pin"
-                  type="text"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  maxlength="4"
-                  minlength="4"
-                  pattern="[0-9]{4}"
-                  placeholder="••••"
-                  required
-                >
+              <input
+                id="pin"
+                type="text"
+                inputmode="numeric"
+                maxlength="4"
+                minlength="4"
+                pattern="[0-9]{4}"
+                placeholder="••••"
+                autocomplete="off"
+                required
+              >
 
-                <button type="submit">
-                  CONNECT
-                </button>
+              <button type="submit">
+                CONNECT
+              </button>
 
-              </form>
+            </form>
 
-              <div id="status"></div>
+            <div id="status"></div>
 
-            </div>
+          </div>
 
-            <script>
+          <script>
 
-              const form =
-                document.getElementById("pinForm");
+          const form =
+            document.getElementById("form");
 
-              const pinInput =
-                document.getElementById("pin");
+          const pin =
+            document.getElementById("pin");
 
-              const status =
-                document.getElementById("status");
+          const status =
+            document.getElementById("status");
 
-              form.addEventListener(
-                "submit",
-                async function(event) {
+          form.addEventListener(
+            "submit",
+            async function(event) {
 
-                  event.preventDefault();
+              event.preventDefault();
 
-                  const pin =
-                    pinInput.value.trim();
+              const value =
+                pin.value.trim();
 
-                  if (!/^[0-9]{4}$/.test(pin)) {
+              if (!/^[0-9]{4}$/.test(value)) {
 
-                    status.textContent =
-                      "Enter a 4-digit PIN.";
+                status.textContent =
+                  "Enter a 4-digit PIN.";
 
-                    return;
-                  }
+                return;
+              }
+
+              status.textContent =
+                "Sending PIN to Sunshine...";
+
+              try {
+
+                const response =
+                  await fetch(
+                    "/pair",
+                    {
+                      method: "POST",
+
+                      headers: {
+                        "Content-Type":
+                          "application/json"
+                      },
+
+                      body:
+                        JSON.stringify({
+                          pin: value
+                        })
+                    }
+                  );
+
+                const data =
+                  await response.json();
+
+                if (data.success) {
 
                   status.textContent =
-                    "Connecting...";
+                    "✓ PIN accepted by Sunshine.";
 
-                  try {
+                } else {
 
-                    const response =
-                      await fetch(
-                        "/pair",
-                        {
-                          method: "POST",
-
-                          headers: {
-                            "Content-Type":
-                              "application/json"
-                          },
-
-                          body:
-                            JSON.stringify({
-                              pin: pin
-                            })
-                        }
-                      );
-
-                    const data =
-                      await response.json();
-
-                    if (data.success) {
-
-                      status.textContent =
-                        "✓ PIN accepted.";
-
-                    } else {
-
-                      status.textContent =
-                        "✕ " +
-                        (data.error ||
-                         "PIN rejected.");
-
-                    }
-
-                  } catch (error) {
-
-                    status.textContent =
-                      "Connection error.";
-
-                  }
+                  status.textContent =
+                    "✕ " +
+                    (data.error ||
+                     "Sunshine rejected the PIN.");
 
                 }
-              );
 
-            </script>
+              } catch (error) {
+
+                status.textContent =
+                  "Connection error.";
+
+              }
+
+            }
+          );
+
+          </script>
 
           </body>
 
           </html>
-          '@ | Set-Content `
-            -Path "$pinPage\index.html" `
+          '@
+
+          $html | Set-Content `
+            "$folder\index.html" `
             -Encoding UTF8
+
+          Write-Host "PIN page created."
 
 
       # ============================================================
-      # 12. CREATE PIN SERVER
+      # 12. CREATE POWERSHELL PIN SERVER
       # ============================================================
       - name: Create PIN Server 🖥️
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $pinPage = "C:\sunshine-pin"
+          $folder = "C:\sunshine-pin"
 
-          @'
-          import os
-          import json
-          import base64
-          import ssl
-          import urllib.request
-          from http.server import BaseHTTPRequestHandler, HTTPServer
+          $server = @'
+          $ErrorActionPreference = "Stop"
 
-          SUNSHINE_USER = os.environ.get(
-              "SUNSHINE_USER",
-              ""
-          )
+          $prefix = "http://+:8080/"
 
-          SUNSHINE_PASSWORD = os.environ.get(
-              "SUNSHINE_PASSWORD",
-              ""
-          )
+          $listener = New-Object `
+            System.Net.HttpListener
 
-          SUNSHINE_URL = (
-              "https://127.0.0.1:47990/api/pin"
-          )
+          $listener.Prefixes.Add($prefix)
 
-          INDEX_FILE = (
-              r"C:\sunshine-pin\index.html"
-          )
+          $listener.Start()
 
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "SUNSHINE PIN SERVER"
+          Write-Host "Listening on port 8080"
+          Write-Host "======================================"
+          Write-Host ""
 
-          class Handler(BaseHTTPRequestHandler):
+          function Send-Response {
 
-              def send_json(self, code, data):
+              param(
+                  $Context,
+                  [int]$StatusCode,
+                  [string]$ContentType,
+                  [string]$Body
+              )
 
-                  body = json.dumps(
-                      data
-                  ).encode("utf-8")
+              $bytes =
+                [System.Text.Encoding]::UTF8.GetBytes(
+                  $Body
+                )
 
-                  self.send_response(code)
+              $Context.Response.StatusCode =
+                $StatusCode
 
-                  self.send_header(
-                      "Content-Type",
-                      "application/json"
-                  )
+              $Context.Response.ContentType =
+                $ContentType
 
-                  self.send_header(
-                      "Content-Length",
-                      str(len(body))
-                  )
+              $Context.Response.ContentLength64 =
+                $bytes.Length
 
-                  self.end_headers()
+              $Context.Response.OutputStream.Write(
+                $bytes,
+                0,
+                $bytes.Length
+              )
 
-                  self.wfile.write(body)
+              $Context.Response.OutputStream.Close()
+          }
 
+          while ($listener.IsListening) {
 
-              def do_GET(self):
+              try {
 
-                  if self.path != "/":
+                  $context =
+                    $listener.GetContext()
 
-                      self.send_error(404)
+                  $request =
+                    $context.Request
 
-                      return
+                  $response =
+                    $context.Response
 
-                  try:
+                  # ------------------------------------------------
+                  # GET /
+                  # ------------------------------------------------
 
-                      with open(
-                          INDEX_FILE,
-                          "rb"
-                      ) as file:
+                  if (
+                    $request.HttpMethod -eq "GET" -and
+                    $request.Url.AbsolutePath -eq "/"
+                  ) {
 
-                          data = file.read()
+                      $html =
+                        Get-Content `
+                          "C:\sunshine-pin\index.html" `
+                          -Raw
 
-                      self.send_response(200)
+                      Send-Response `
+                        $context `
+                        200 `
+                        "text/html; charset=utf-8" `
+                        $html
 
-                      self.send_header(
-                          "Content-Type",
-                          "text/html; charset=utf-8"
-                      )
+                      continue
+                  }
 
-                      self.send_header(
-                          "Content-Length",
-                          str(len(data))
-                      )
+                  # ------------------------------------------------
+                  # POST /pair
+                  # ------------------------------------------------
 
-                      self.end_headers()
+                  if (
+                    $request.HttpMethod -eq "POST" -and
+                    $request.Url.AbsolutePath -eq "/pair"
+                  ) {
 
-                      self.wfile.write(data)
-
-                  except Exception as e:
-
-                      self.send_error(
-                          500,
-                          str(e)
-                      )
-
-
-              def do_POST(self):
-
-                  if self.path != "/pair":
-
-                      self.send_json(
-                          404,
-                          {
-                              "success": False
-                          }
-                      )
-
-                      return
-
-                  try:
-
-                      length = int(
-                          self.headers.get(
-                              "Content-Length",
-                              "0"
+                      $reader =
+                        New-Object `
+                          System.IO.StreamReader(
+                            $request.InputStream,
+                            $request.ContentEncoding
                           )
-                      )
 
-                      body = self.rfile.read(
-                          length
-                      )
+                      $body =
+                        $reader.ReadToEnd()
 
-                      data = json.loads(
-                          body.decode("utf-8")
-                      )
+                      $reader.Close()
 
-                      pin = str(
-                          data.get(
-                              "pin",
-                              ""
-                          )
-                      ).strip()
+                      try {
+
+                          $data =
+                            $body | ConvertFrom-Json
+
+                          $pin =
+                            [string]$data.pin
+
+                      }
+                      catch {
+
+                          Send-Response `
+                            $context `
+                            400 `
+                            "application/json" `
+                            '{"success":false,"error":"Invalid request."}'
+
+                          continue
+                      }
 
                       if (
-                          not pin.isdigit()
-                          or len(pin) != 4
-                      ):
+                        $pin -notmatch '^\d{4}$'
+                      ) {
 
-                          self.send_json(
-                              400,
-                              {
-                                  "success": False,
-                                  "error":
-                                    "PIN must be 4 digits."
-                              }
-                          )
+                          Send-Response `
+                            $context `
+                            400 `
+                            "application/json" `
+                            '{"success":false,"error":"PIN must contain exactly 4 digits."}'
 
-                          return
+                          continue
+                      }
 
-                      print(
-                          "",
-                          flush=True
-                      )
+                      Write-Host ""
+                      Write-Host "======================================"
+                      Write-Host "PIN RECEIVED:"
+                      Write-Host $pin
+                      Write-Host "Sending PIN to Sunshine..."
+                      Write-Host "======================================"
 
-                      print(
-                          "================================",
-                          flush=True
-                      )
+                      # --------------------------------------------
+                      # Sunshine API
+                      # --------------------------------------------
 
-                      print(
-                          "PIN RECEIVED:",
-                          pin,
-                          flush=True
-                      )
+                      $pairBody = @{
+                          pin = $pin
+                          name = "iPhone"
+                      } | ConvertTo-Json -Compress
 
-                      print(
-                          "Sending PIN to Sunshine...",
-                          flush=True
-                      )
+                      $credentialString =
+                        $env:SUNSHINE_USER +
+                        ":" +
+                        $env:SUNSHINE_PASSWORD
 
-                      print(
-                          "================================",
-                          flush=True
-                      )
+                      $credentialBytes =
+                        [System.Text.Encoding]::ASCII.GetBytes(
+                          $credentialString
+                        )
 
-                      # ----------------------------------------------
-                      # Basic authentication
-                      # ----------------------------------------------
+                      $base64 =
+                        [Convert]::ToBase64String(
+                          $credentialBytes
+                        )
 
-                      credentials = (
-                          SUNSHINE_USER
-                          + ":"
-                          + SUNSHINE_PASSWORD
-                      )
+                      $headers = @{
+                          Authorization =
+                            "Basic $base64"
+                      }
 
-                      auth = base64.b64encode(
-                          credentials.encode(
-                              "utf-8"
-                          )
-                      ).decode("ascii")
+                      try {
 
-                      payload = json.dumps(
-                          {
-                              "pin": pin,
-                              "name": "iPhone"
-                          }
-                      ).encode("utf-8")
+                          $result =
+                            Invoke-RestMethod `
+                              -Uri "https://127.0.0.1:47990/api/pin" `
+                              -Method POST `
+                              -Headers $headers `
+                              -ContentType "application/json" `
+                              -Body $pairBody `
+                              -SkipCertificateCheck
 
-                      request = urllib.request.Request(
-                          SUNSHINE_URL,
-                          data=payload,
-                          method="POST"
-                      )
+                          Write-Host ""
+                          Write-Host "SUNSHINE ACCEPTED THE PIN."
+                          Write-Host ""
 
-                      request.add_header(
-                          "Content-Type",
-                          "application/json"
-                      )
+                          $json = @{
+                              success = $true
+                              message = "PIN accepted by Sunshine."
+                          } | ConvertTo-Json -Compress
 
-                      request.add_header(
-                          "Authorization",
-                          "Basic " + auth
-                      )
+                          Send-Response `
+                            $context `
+                            200 `
+                            "application/json" `
+                            $json
+                      }
 
-                      # Sunshine uses a
-                      # self-signed certificate.
+                      catch {
 
-                      context = (
-                          ssl._create_unverified_context()
-                      )
+                          $errorMessage =
+                            $_.Exception.Message
 
-                      try:
+                          Write-Host ""
+                          Write-Host "SUNSHINE API ERROR:"
+                          Write-Host $errorMessage
+                          Write-Host ""
 
-                          with urllib.request.urlopen(
-                              request,
-                              context=context,
-                              timeout=15
-                          ) as response:
+                          $json = @{
+                              success = $false
+                              error = $errorMessage
+                          } | ConvertTo-Json -Compress
 
-                              result =
-                                  response.read().decode(
-                                      "utf-8",
-                                      errors="replace"
-                                  )
+                          Send-Response `
+                            $context `
+                            400 `
+                            "application/json" `
+                            $json
+                      }
 
-                          print(
-                              "Sunshine accepted the PIN.",
-                              flush=True
-                          )
+                      continue
+                  }
 
-                          self.send_json(
-                              200,
-                              {
-                                  "success": True,
-                                  "message":
-                                    "PIN submitted."
-                              }
-                          )
+                  # ------------------------------------------------
+                  # 404
+                  # ------------------------------------------------
 
-                      except Exception as e:
+                  Send-Response `
+                    $context `
+                    404 `
+                    "text/plain" `
+                    "Not Found"
+              }
 
-                          print(
-                              "Sunshine API error:",
-                              str(e),
-                              flush=True
-                          )
+              catch {
 
-                          self.send_json(
-                              400,
-                              {
-                                  "success": False,
-                                  "error": str(e)
-                              }
-                          )
+                  Write-Host ""
+                  Write-Host "PIN SERVER ERROR:"
+                  Write-Host $_.Exception.Message
+                  Write-Host ""
+              }
+          }
+          '@
 
-                  except Exception as e:
-
-                      print(
-                          "Server error:",
-                          str(e),
-                          flush=True
-                      )
-
-                      self.send_json(
-                          500,
-                          {
-                              "success": False,
-                              "error": str(e)
-                          }
-                      )
-
-
-          print(
-              "======================================",
-              flush=True
-          )
-
-          print(
-              "Sunshine PIN server started.",
-              flush=True
-          )
-
-          print(
-              "Listening on 0.0.0.0:8080",
-              flush=True
-          )
-
-          print(
-              "======================================",
-              flush=True
-          )
-
-
-          server = HTTPServer(
-              ("0.0.0.0", 8080),
-              Handler
-          )
-
-          server.serve_forever()
-          '@ | Set-Content `
-            -Path "$pinPage\server.py" `
+          $server | Set-Content `
+            "$folder\server.ps1" `
             -Encoding UTF8
 
-          Write-Host "PIN server files created."
+          Write-Host "PIN server created."
 
 
       # ============================================================
-      # 13. OPEN TAILSCALE FIREWALL FOR PIN PAGE
+      # 13. PIN SERVER FIREWALL
       # ============================================================
       - name: Configure PIN Page Firewall 🔥
         shell: powershell
@@ -1209,8 +1105,8 @@ jobs:
           Write-Host "PIN page firewall configured."
 
 
-            # ============================================================
-      # START PIN PAGE
+      # ============================================================
+      # 14. START PIN SERVER
       # ============================================================
       - name: Start PIN Page 📱
         shell: powershell
@@ -1219,74 +1115,30 @@ jobs:
 
           Write-Host "Starting PIN page..."
 
-          # Find Python
-          $pythonPath = $null
-
-          $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
-
-          if ($pythonCommand) {
-              $pythonPath = $pythonCommand.Source
-          }
-
-          # GitHub Windows runners normally have Python available,
-          # but install it if it is missing.
-          if (-not $pythonPath) {
-
-              Write-Host "Python was not found. Installing Python..."
-
-              winget install `
-                --id Python.Python.3.12 `
-                --exact `
-                --silent `
-                --accept-package-agreements `
-                --accept-source-agreements `
-                --disable-interactivity
-
-              Start-Sleep -Seconds 5
-
-              $pythonCommand = Get-Command python.exe `
-                -ErrorAction SilentlyContinue
-
-              if ($pythonCommand) {
-                  $pythonPath = $pythonCommand.Source
-              }
-          }
-
-          if (-not $pythonPath) {
-              throw "Python executable could not be found."
-          }
-
-          Write-Host "Python:"
-          Write-Host $pythonPath
-
           # --------------------------------------------------------
-          # Test the Python server BEFORE running it in background.
-          # This exposes syntax/runtime errors directly in Actions.
+          # Check server syntax first
           # --------------------------------------------------------
 
-          Write-Host ""
-          Write-Host "Checking PIN server syntax..."
+          $script = "C:\sunshine-pin\server.ps1"
 
-          & $pythonPath -m py_compile `
-            "C:\sunshine-pin\server.py"
+          $null = [scriptblock]::Create(
+            (Get-Content $script -Raw)
+          )
 
-          if ($LASTEXITCODE -ne 0) {
-              throw "PIN server contains a Python syntax error."
-          }
-
-          Write-Host "Python syntax OK."
+          Write-Host "PIN server syntax OK."
 
           # --------------------------------------------------------
-          # Start server
+          # Start PowerShell server
           # --------------------------------------------------------
-
-          Write-Host ""
-          Write-Host "Launching PIN server..."
 
           $process = Start-Process `
-            -FilePath $pythonPath `
+            -FilePath "powershell.exe" `
             -ArgumentList `
-              "`"C:\sunshine-pin\server.py`"" `
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "`"$script`"" `
             -WorkingDirectory `
               "C:\sunshine-pin" `
             -PassThru `
@@ -1298,40 +1150,30 @@ jobs:
           # Check process
           # --------------------------------------------------------
 
-          $running = Get-Process `
-            -Id $process.Id `
-            -ErrorAction SilentlyContinue
+          if (
+            -not (
+              Get-Process `
+                -Id $process.Id `
+                -ErrorAction SilentlyContinue
+            )
+          ) {
 
-          if (-not $running) {
-
-              Write-Host ""
-              Write-Host "PIN server exited immediately."
-
-              Write-Host ""
-              Write-Host "Running server directly to show the error:"
-              Write-Host "------------------------------------------------"
-
-              & $pythonPath `
-                "C:\sunshine-pin\server.py"
-
-              throw "PIN server failed to start."
+              throw "PIN server exited immediately."
           }
 
           # --------------------------------------------------------
           # Check port
           # --------------------------------------------------------
 
-          Write-Host ""
-          Write-Host "Checking port 8080..."
-
           $ready = $false
 
           for ($i = 0; $i -lt 20; $i++) {
 
-              $check = Test-NetConnection `
-                -ComputerName "127.0.0.1" `
-                -Port 8080 `
-                -WarningAction SilentlyContinue
+              $check =
+                Test-NetConnection `
+                  -ComputerName "127.0.0.1" `
+                  -Port 8080 `
+                  -WarningAction SilentlyContinue
 
               if ($check.TcpTestSucceeded) {
 
@@ -1340,7 +1182,7 @@ jobs:
               }
 
               Write-Host `
-                "Waiting for PIN server... ($($i + 1)/20)"
+                "Waiting for PIN page... ($($i + 1)/20)"
 
               Start-Sleep -Seconds 2
           }
@@ -1348,23 +1190,14 @@ jobs:
           if (-not $ready) {
 
               Write-Host ""
-              Write-Host "PIN server process is running, but port 8080 is not listening."
+              Write-Host "Port 8080 is not listening."
 
               Write-Host ""
-              Write-Host "Server process:"
-              Get-Process -Id $process.Id `
-                -ErrorAction SilentlyContinue
-
-              Write-Host ""
-              Write-Host "Port check:"
+              Write-Host "Current port state:"
               netstat -ano | findstr ":8080"
 
-              throw "PIN page failed to listen on port 8080."
+              throw "PIN page failed to start."
           }
-
-          # --------------------------------------------------------
-          # SUCCESS
-          # --------------------------------------------------------
 
           Write-Host ""
           Write-Host "======================================================"
@@ -1372,7 +1205,7 @@ jobs:
           Write-Host "======================================================"
           Write-Host ""
 
-          Write-Host "Open this on your iPhone:"
+          Write-Host "OPEN THIS ON YOUR IPHONE:"
           Write-Host ""
 
           Write-Host `
@@ -1380,16 +1213,15 @@ jobs:
 
           Write-Host ""
 
-          Write-Host "Moonlight PC Address:"
+          Write-Host "MOONLIGHT PC ADDRESS:"
+          Write-Host ""
+
           Write-Host $env:TAILSCALE_IP
 
           Write-Host ""
-
-          Write-Host "PIN:"
-          Write-Host "Get the PIN from Moonlight and enter it on the page."
-
-          Write-Host ""
           Write-Host "======================================================"
+
+
       # ============================================================
       # 15. FINAL ACCESS INFORMATION
       # ============================================================
@@ -1441,12 +1273,10 @@ jobs:
 
           Write-Host "PIN PAGE"
           Write-Host "------------------------------------------------------"
-          Write-Host "Open on iPhone:"
           Write-Host ""
           Write-Host "http://$env:TAILSCALE_IP:8080"
           Write-Host ""
-
-          Write-Host "Enter the PIN shown by Moonlight."
+          Write-Host "Enter the PIN generated by Moonlight."
           Write-Host ""
 
           Write-Host "======================================================"
