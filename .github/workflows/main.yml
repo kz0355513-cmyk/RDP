@@ -10,13 +10,15 @@ jobs:
 
     steps:
 
-      # ==========================================
+      # ============================================================
       # ENABLE RDP
-      # ==========================================
+      # ============================================================
       - name: Configure RDP Settings 🔧
         shell: powershell
         run: |
-          Write-Host "Configuring RDP and Firewall..."
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Configuring RDP..."
 
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
@@ -36,7 +38,7 @@ jobs:
             -Value 1 `
             -Force
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
 
           netsh advfirewall firewall add rule `
             name="RDP-Tailscale" `
@@ -44,6 +46,7 @@ jobs:
             action=allow `
             protocol=TCP `
             localport=3389 `
+            remoteip=100.64.0.0/10 `
             profile=any
 
           Enable-NetFirewallRule `
@@ -52,63 +55,58 @@ jobs:
 
           Restart-Service -Name TermService -Force
 
-          $maxWait = 30
-          $timeout = (Get-Date).AddSeconds($maxWait)
+          $timeout = (Get-Date).AddSeconds(30)
 
-          while ((Get-Service -Name TermService).Status -ne 'Running') {
+          while ((Get-Service -Name TermService).Status -ne "Running") {
 
-              if ((Get-Date) -gt $timeout) {
-                  Write-Error "TermService failed to start."
-                  exit 1
-              }
+            if ((Get-Date) -gt $timeout) {
+              throw "TermService failed to start."
+            }
 
-              Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 2
           }
 
-          Write-Host "RDP service is Running."
+          Write-Host "RDP is running."
 
 
-      # ==========================================
+      # ============================================================
       # CREATE RDP USER
-      # ==========================================
+      # ============================================================
       - name: Create RDP User 🔐
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
-          Add-Type -AssemblyName System.Security
-
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = (
-                  [char[]](33..47) +
-                  [char[]](58..64) +
-                  [char[]](91..96) +
-                  [char[]](123..126)
-              )
-          }
-
-          $rawPassword = @()
-
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-
-          $password = -join (
-              $rawPassword |
-              Sort-Object { Get-Random }
+          $upper   = [char[]](65..90)
+          $lower   = [char[]](97..122)
+          $numbers = [char[]](48..57)
+          $special = (
+            [char[]](33..47) +
+            [char[]](58..64) +
+            [char[]](91..96) +
+            [char[]](123..126)
           )
 
-          $securePass = ConvertTo-SecureString `
+          $passwordChars = @()
+
+          $passwordChars += $upper   | Get-Random -Count 4
+          $passwordChars += $lower   | Get-Random -Count 4
+          $passwordChars += $numbers | Get-Random -Count 4
+          $passwordChars += $special | Get-Random -Count 4
+
+          $password = -join (
+            $passwordChars |
+            Sort-Object { Get-Random }
+          )
+
+          $securePassword = ConvertTo-SecureString `
             $password `
             -AsPlainText `
             -Force
 
           New-LocalUser `
             -Name "RDP" `
-            -Password $securePass `
+            -Password $securePassword `
             -AccountNeverExpires
 
           Add-LocalGroupMember `
@@ -122,102 +120,91 @@ jobs:
           "RDP_USER=RDP" >> $env:GITHUB_ENV
           "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "RDP user creation failed."
-              exit 1
-          }
-
-          Write-Host "RDP user created successfully."
+          Write-Host "RDP user created."
 
 
-      # ==========================================
+      # ============================================================
       # INSTALL TAILSCALE
-      # ==========================================
+      # ============================================================
       - name: Install Tailscale 🌐
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
           $tsVersion = "1.90.6"
 
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
+          $tsUrl = `
+            "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi"
 
-          $installerPath = "$env:TEMP\tailscale.msi"
+          $installer = "$env:TEMP\tailscale.msi"
 
           Write-Host "Downloading Tailscale..."
 
           Start-BitsTransfer `
             -Source $tsUrl `
-            -Destination $installerPath
+            -Destination $installer
 
-          if (-not (Test-Path $installerPath)) {
-              Write-Error "Failed to download Tailscale."
-              exit 1
+          if (-not (Test-Path $installer)) {
+            throw "Tailscale download failed."
           }
-
-          Write-Host "Installing Tailscale..."
 
           Start-Process `
             msiexec.exe `
-            -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
             -Wait
 
           Remove-Item `
-            $installerPath `
+            $installer `
             -Force `
             -ErrorAction SilentlyContinue
 
           Write-Host "Tailscale installed."
 
 
-      # ==========================================
+      # ============================================================
       # CONNECT TAILSCALE
-      # ==========================================
+      # ============================================================
       - name: Establish Tailscale Connection 🌐
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
 
           $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
 
           if (-not (Test-Path $tailscale)) {
-              Write-Error "Tailscale executable not found."
-              exit 1
+            throw "Tailscale executable not found."
           }
 
           & $tailscale up `
             --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" `
-            --hostname="gh-runner-$env:GITHUB_RUN_ID"
+            --hostname="gh-sunshine-$env:GITHUB_RUN_ID"
 
           $tsIP = $null
-          $retries = 0
 
-          while (-not $tsIP -and $retries -lt 15) {
+          for ($i = 0; $i -lt 20; $i++) {
 
-              $result = & $tailscale ip -4 2>$null
+            $result = & $tailscale ip -4 2>$null
 
-              foreach ($line in $result) {
+            foreach ($line in $result) {
 
-                  $line = $line.Trim()
+              $line = $line.Trim()
 
-                  if ($line -match '^\d{1,3}(\.\d{1,3}){3}$') {
-                      $tsIP = $line
-                      break
-                  }
+              if ($line -match '^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
+                $tsIP = $line
+                break
               }
+            }
 
-              if ($tsIP) {
-                  break
-              }
+            if ($tsIP) {
+              break
+            }
 
-              Write-Host "Waiting for Tailscale IP..."
-
-              Start-Sleep -Seconds 5
-
-              $retries++
+            Write-Host "Waiting for Tailscale IP..."
+            Start-Sleep -Seconds 3
           }
 
           if (-not $tsIP) {
-              Write-Error "Tailscale IP was not assigned."
-              exit 1
+            throw "Tailscale IP was not assigned."
           }
 
           "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
@@ -225,188 +212,280 @@ jobs:
           Write-Host "Tailscale IP: $tsIP"
 
 
-      # ==========================================
+      # ============================================================
       # INSTALL SUNSHINE
-      # ==========================================
-      - name: Install and Start Sunshine ☀️
+      # ============================================================
+      - name: Install Sunshine ☀️
         shell: powershell
         run: |
-
           $ErrorActionPreference = "Stop"
 
-          Write-Host "Downloading Sunshine..."
+          $sunshineVersion = "2026.527.25539"
 
-          #
-          # Sunshine Windows installer
-          #
-          $sunshineVersion = "2026.516.143833"
+          $sunshineUrl = `
+            "https://github.com/LizardByte/Sunshine/releases/download/v$sunshineVersion/Sunshine-Windows-AMD64-installer.msi"
 
-          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/download/v$sunshineVersion/Sunshine-Windows-AMD64-installer.msi"
+          $installer = "$env:TEMP\Sunshine.msi"
 
-          $installerPath = "$env:TEMP\Sunshine.msi"
-
-          Write-Host "URL:"
-          Write-Host $sunshineUrl
+          Write-Host "Downloading Sunshine $sunshineVersion..."
 
           Invoke-WebRequest `
             -Uri $sunshineUrl `
-            -OutFile $installerPath `
+            -OutFile $installer `
             -UseBasicParsing
 
-          if (-not (Test-Path $installerPath)) {
-              Write-Error "Sunshine download failed."
-              exit 1
+          if (-not (Test-Path $installer)) {
+            throw "Sunshine download failed."
           }
 
           Write-Host "Installing Sunshine..."
 
           Start-Process `
-            -FilePath "msiexec.exe" `
+            msiexec.exe `
             -ArgumentList `
               "/i",
-              "`"$installerPath`"",
+              "`"$installer`"",
               "/qn",
               "/norestart" `
             -Wait `
             -NoNewWindow
 
           Remove-Item `
-            $installerPath `
+            $installer `
             -Force `
             -ErrorAction SilentlyContinue
 
           Write-Host "Sunshine installed."
 
 
-          # ==========================================
-          # SUNSHINE FIREWALL
-          # ==========================================
+      # ============================================================
+      # CONFIGURE SUNSHINE
+      # ============================================================
+      - name: Configure Sunshine 🔐
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          Write-Host "Configuring Sunshine firewall..."
+          $sunshineExe = "C:\Program Files\Sunshine\sunshine.exe"
+          $configDir   = "C:\Program Files\Sunshine\config"
+          $configFile  = "$configDir\sunshine.conf"
+
+          if (-not (Test-Path $sunshineExe)) {
+            throw "Sunshine executable was not found."
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $configDir `
+            -Force | Out-Null
+
+          # ----------------------------------------------------------
+          # Generate Sunshine credentials
+          # ----------------------------------------------------------
+
+          $sunUser = "sunshine"
+
+          $chars = (
+            [char[]](65..90) +
+            [char[]](97..122) +
+            [char[]](48..57)
+          )
+
+          $sunPassword = -join (
+            1..20 | ForEach-Object {
+              $chars | Get-Random
+            }
+          )
+
+          # ----------------------------------------------------------
+          # Configure Web UI access through Tailscale
+          # ----------------------------------------------------------
+
+          @"
+          origin_web_ui_allowed = wan
+          csrf_allowed_origins = https://$env:TAILSCALE_IP:47990
+          port = 47989
+          "@ | Set-Content `
+            -Path $configFile `
+            -Encoding UTF8
+
+          Write-Host "Sunshine configuration created."
+
+          # ----------------------------------------------------------
+          # Stop any automatically installed Sunshine service
+          # ----------------------------------------------------------
+
+          Stop-Service `
+            -Name "Sunshine" `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 2
+
+          # ----------------------------------------------------------
+          # Create Sunshine Web UI credentials
+          # ----------------------------------------------------------
+
+          Write-Host "Creating Sunshine credentials..."
+
+          & $sunshineExe `
+            --creds $sunUser $sunPassword
+
+          Start-Sleep -Seconds 2
+
+          # ----------------------------------------------------------
+          # Firewall - Tailscale only
+          # ----------------------------------------------------------
+
+          netsh advfirewall firewall delete rule `
+            name="Sunshine-Tailscale-Web" 2>$null
+
+          netsh advfirewall firewall delete rule `
+            name="Sunshine-Tailscale-TCP" 2>$null
+
+          netsh advfirewall firewall delete rule `
+            name="Sunshine-Tailscale-UDP" 2>$null
 
           netsh advfirewall firewall add rule `
-            name="Sunshine-WebUI" `
+            name="Sunshine-Tailscale-Web" `
             dir=in `
             action=allow `
             protocol=TCP `
             localport=47990 `
+            remoteip=100.64.0.0/10 `
             profile=any
 
           netsh advfirewall firewall add rule `
-            name="Sunshine-TCP" `
+            name="Sunshine-Tailscale-TCP" `
             dir=in `
             action=allow `
             protocol=TCP `
             localport=47984-47990 `
+            remoteip=100.64.0.0/10 `
             profile=any
 
           netsh advfirewall firewall add rule `
-            name="Sunshine-UDP" `
+            name="Sunshine-Tailscale-UDP" `
             dir=in `
             action=allow `
             protocol=UDP `
             localport=47998-48000 `
+            remoteip=100.64.0.0/10 `
             profile=any
 
-
-          # ==========================================
-          # START SUNSHINE
-          # ==========================================
+          # ----------------------------------------------------------
+          # Start Sunshine manually
+          # ----------------------------------------------------------
 
           Write-Host "Starting Sunshine..."
 
-          Start-Service `
-            -Name "Sunshine" `
-            -ErrorAction SilentlyContinue
+          Start-Process `
+            -FilePath $sunshineExe `
+            -WorkingDirectory "C:\Program Files\Sunshine" `
+            -WindowStyle Hidden
 
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 8
 
-          $sunshineService = Get-Service `
-            -Name "Sunshine" `
-            -ErrorAction SilentlyContinue
+          # ----------------------------------------------------------
+          # Save credentials for following step
+          # ----------------------------------------------------------
 
-          if ($sunshineService) {
-
-              Write-Host "Sunshine service status: $($sunshineService.Status)"
-
-          } else {
-
-              Write-Host "Sunshine service was not detected."
-
-          }
-
-
-          # ==========================================
-          # DISPLAY INFORMATION
-          # ==========================================
+          "SUNSHINE_USER=$sunUser" >> $env:GITHUB_ENV
+          "SUNSHINE_PASSWORD=$sunPassword" >> $env:GITHUB_ENV
 
           Write-Host ""
           Write-Host "=============================================="
-          Write-Host "           SUNSHINE READY"
+          Write-Host "           SUNSHINE IS READY"
           Write-Host "=============================================="
+          Write-Host ""
+          Write-Host "Sunshine Username:"
+          Write-Host "$sunUser"
+          Write-Host ""
+          Write-Host "Sunshine Password:"
+          Write-Host "$sunPassword"
           Write-Host ""
           Write-Host "Sunshine Web UI:"
           Write-Host "https://$env:TAILSCALE_IP:47990"
           Write-Host ""
-          Write-Host "Use the Web UI to create your Sunshine"
-          Write-Host "username and password."
-          Write-Host ""
-          Write-Host "Then open Moonlight on your iPhone."
-          Write-Host "Add the Tailscale IP."
-          Write-Host ""
-          Write-Host "Moonlight will generate the pairing PIN."
-          Write-Host "Enter that PIN in Sunshine."
-          Write-Host ""
           Write-Host "=============================================="
 
 
-      # ==========================================
-      # FINAL ACCESS INFORMATION
-      # ==========================================
+      # ============================================================
+      # CHECK SUNSHINE
+      # ============================================================
+      - name: Check Sunshine Web UI 🔎
+        shell: powershell
+        run: |
+          Write-Host "Checking Sunshine..."
+
+          Start-Sleep -Seconds 5
+
+          $test = Test-NetConnection `
+            -ComputerName "127.0.0.1" `
+            -Port 47990 `
+            -WarningAction SilentlyContinue
+
+          if ($test.TcpTestSucceeded) {
+            Write-Host "Sunshine Web UI is listening on port 47990."
+          }
+          else {
+            Write-Host "WARNING: Sunshine Web UI is not responding yet."
+          }
+
+
+      # ============================================================
+      # DISPLAY ALL ACCESS INFORMATION
+      # ============================================================
       - name: Display Access Information ✨
         shell: powershell
         run: |
 
           Write-Host ""
-          Write-Host "=============================================="
-          Write-Host "              ACCESS INFORMATION"
-          Write-Host "=============================================="
+          Write-Host "======================================================"
+          Write-Host "                  ACCESS INFORMATION"
+          Write-Host "======================================================"
           Write-Host ""
 
-          Write-Host "Tailscale IP:"
+          Write-Host "RDP"
+          Write-Host "------------------------------------------------------"
+          Write-Host "IP:"
           Write-Host "$env:TAILSCALE_IP"
-
           Write-Host ""
-
-          Write-Host "RDP Username:"
+          Write-Host "Username:"
           Write-Host "$env:RDP_USER"
-
           Write-Host ""
-
-          Write-Host "RDP Password:"
+          Write-Host "Password:"
           Write-Host "$env:RDP_PASSWORD"
-
           Write-Host ""
 
-          Write-Host "Sunshine Web UI:"
+          Write-Host "SUNSHINE"
+          Write-Host "------------------------------------------------------"
+          Write-Host "Web UI:"
           Write-Host "https://$env:TAILSCALE_IP:47990"
-
+          Write-Host ""
+          Write-Host "Username:"
+          Write-Host "$env:SUNSHINE_USER"
+          Write-Host ""
+          Write-Host "Password:"
+          Write-Host "$env:SUNSHINE_PASSWORD"
           Write-Host ""
 
-          Write-Host "Moonlight:"
-          Write-Host "Add the Tailscale IP shown above."
-
+          Write-Host "MOONLIGHT"
+          Write-Host "------------------------------------------------------"
+          Write-Host "Add this PC:"
+          Write-Host "$env:TAILSCALE_IP"
           Write-Host ""
-          Write-Host "=============================================="
-          Write-Host "Runner will remain active for up to 6 hours."
-          Write-Host "=============================================="
+          Write-Host "Moonlight will generate the pairing PIN."
+          Write-Host "Enter that PIN inside Sunshine -> PIN."
+          Write-Host ""
 
-
-          # Keep runner alive
+          Write-Host "======================================================"
+          Write-Host "              RUNNER ACTIVE - 6 HOURS"
+          Write-Host "======================================================"
 
           while ($true) {
 
-              Write-Host "[$(Get-Date)] Runner Active..."
+            Write-Host "[$(Get-Date)] Runner Active..."
 
-              Start-Sleep -Seconds 300
+            Start-Sleep -Seconds 300
           }
