@@ -233,7 +233,7 @@ jobs:
 
 
       # ============================================================
-      # 5. INSTALL VIRTUAL DISPLAY (FIX)
+      # 5. INSTALL VIRTUAL DISPLAY
       # ============================================================
       - name: Install Virtual Display
         shell: powershell
@@ -257,165 +257,51 @@ jobs:
 
 
       # ============================================================
-      # 6. DOWNLOAD LATEST SUNSHINE
+      # 6. DOWNLOAD & EXTRACT PORTABLE SUNSHINE
       # ============================================================
-      - name: Download Sunshine
+      - name: Download Sunshine Portable
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+          $progressPreference = 'SilentlyContinue'
 
-          Write-Host "Finding latest Sunshine release..."
-
+          Write-Host "Fetching latest Sunshine release..."
+          $apiUrl = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+          
           $headers = @{
             "User-Agent" = "GitHub-Actions-Sunshine"
             "Accept" = "application/vnd.github+json"
           }
 
-          $release = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/LizardByte/Sunshine/releases/latest" `
-            -Headers $headers
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          
+          $portableAsset = $release.assets | Where-Object { $_.name -match "windows-portable\.zip$" }
 
-          Write-Host ""
-          Write-Host "Latest Sunshine:"
-          Write-Host $release.tag_name
-
-          $asset = $release.assets |
-            Where-Object {
-              $_.name -match '^Sunshine-Windows-AMD64-installer\.exe$'
-            } |
-            Select-Object -First 1
-
-          if (-not $asset) {
-            $asset = $release.assets |
-              Where-Object {
-                $_.name -match '(?i)windows.*amd64.*installer.*\.exe$'
-              } |
-              Select-Object -First 1
+          if (-not $portableAsset) {
+            throw "Could not find the portable zip asset."
           }
 
-          if (-not $asset) {
-            throw "AMD64 Sunshine Windows installer was not found."
-          }
+          Write-Host "Downloading $($portableAsset.name)..."
+          $zipPath = "$env:TEMP\sunshine-portable.zip"
+          
+          Invoke-WebRequest -Uri $portableAsset.browser_download_url -OutFile $zipPath
 
-          Write-Host ""
-          Write-Host "Selected Sunshine asset:"
-          Write-Host $asset.name
+          $extractPath = "C:\Sunshine"
+          Write-Host "Extracting Sunshine to $extractPath..."
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
-          $installer = "$env:TEMP\sunshine-installer.exe"
+          Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 
-          Write-Host ""
-          Write-Host "Downloading Sunshine..."
-
-          curl.exe `
-            -L `
-            --fail `
-            --retry 12 `
-            --retry-all-errors `
-            --retry-delay 5 `
-            --connect-timeout 30 `
-            --max-time 900 `
-            -A "Mozilla/5.0" `
-            -o "$installer" `
-            "$($asset.browser_download_url)"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Sunshine download failed."
-          }
-
-          $size = (Get-Item $installer).Length
-
-          if ($size -lt 5000000) {
-            throw "Sunshine installer appears incomplete."
-          }
-
-          "SUNSHINE_INSTALLER=$installer" | Out-File `
+          "SUNSHINE_EXE=$extractPath\sunshine.exe" | Out-File `
             $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
 
-          Write-Host "Sunshine downloaded successfully."
+          Write-Host "Sunshine portable extracted successfully."
 
 
       # ============================================================
-      # 7. INSTALL SUNSHINE
-      # ============================================================
-      - name: Install Sunshine
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $installer = $env:SUNSHINE_INSTALLER
-
-          Write-Host "Installing Sunshine..."
-
-          $process = Start-Process `
-            -FilePath $installer `
-            -ArgumentList "/S" `
-            -Wait `
-            -PassThru
-
-          if ($process.ExitCode -ne 0) {
-            throw "Sunshine installer failed."
-          }
-
-          Remove-Item `
-            $installer `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Write-Host "Sunshine installed."
-
-
-      # ============================================================
-      # 8. FIND SUNSHINE
-      # ============================================================
-      - name: Find Sunshine
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $paths = @(
-            "C:\Program Files\Sunshine\sunshine.exe",
-            "$env:ProgramFiles\Sunshine\sunshine.exe"
-          )
-
-          $sunshineExe = $null
-
-          foreach ($path in $paths) {
-            if (Test-Path $path) {
-              $sunshineExe = $path
-              break
-            }
-          }
-
-          if (-not $sunshineExe) {
-            $found = Get-ChildItem `
-              "C:\Program Files" `
-              -Filter "sunshine.exe" `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-            if ($found) {
-              $sunshineExe = $found.FullName
-            }
-          }
-
-          if (-not $sunshineExe) {
-            throw "sunshine.exe was not found."
-          }
-
-          "SUNSHINE_EXE=$sunshineExe" | Out-File `
-            $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          Write-Host "Sunshine executable:"
-          Write-Host $sunshineExe
-
-
-      # ============================================================
-      # 9. CONFIGURE SUNSHINE CREDENTIALS
+      # 7. CONFIGURE SUNSHINE CREDENTIALS
       # ============================================================
       - name: Configure Sunshine Credentials
         shell: powershell
@@ -467,7 +353,7 @@ jobs:
 
 
       # ============================================================
-      # 10. SUNSHINE FIREWALL (FIX)
+      # 8. SUNSHINE FIREWALL
       # ============================================================
       - name: Configure Sunshine Firewall
         shell: powershell
@@ -487,7 +373,6 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          # Added Port 48010
           netsh advfirewall firewall add rule `
             name="Sunshine-Tailscale-TCP" `
             dir=in `
@@ -497,7 +382,6 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          # Added Ports 48002 and 48010
           netsh advfirewall firewall add rule `
             name="Sunshine-Tailscale-UDP" `
             dir=in `
@@ -507,11 +391,11 @@ jobs:
             remoteip=100.64.0.0/10 `
             profile=any
 
-          Write-Host "Firewall configured with updated Sunshine ports."
+          Write-Host "Firewall configured."
 
 
       # ============================================================
-      # 11. START SUNSHINE
+      # 9. START SUNSHINE
       # ============================================================
       - name: Start Sunshine
         shell: powershell
@@ -542,7 +426,7 @@ jobs:
 
 
       # ============================================================
-      # 12. CREATE PIN PAGE
+      # 10. CREATE PIN PAGE
       # ============================================================
       - name: Create PIN Page
         shell: powershell
@@ -620,7 +504,7 @@ jobs:
 
 
       # ============================================================
-      # 13. CREATE PIN SERVER
+      # 11. CREATE PIN SERVER
       # ============================================================
       - name: Create PIN Server
         shell: powershell
@@ -703,7 +587,7 @@ jobs:
 
 
       # ============================================================
-      # 14. PIN FIREWALL
+      # 12. PIN FIREWALL
       # ============================================================
       - name: Configure PIN Firewall
         shell: powershell
@@ -723,7 +607,7 @@ jobs:
 
 
       # ============================================================
-      # 15. START PIN SERVER
+      # 13. START PIN SERVER
       # ============================================================
       - name: Start PIN Page
         shell: powershell
@@ -761,7 +645,7 @@ jobs:
 
 
       # ============================================================
-      # 16. FINAL INFORMATION
+      # 14. FINAL INFORMATION
       # ============================================================
       - name: Access Information
         shell: powershell
