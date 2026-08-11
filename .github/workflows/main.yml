@@ -1,676 +1,111 @@
-name: RDP - Windows 11 + Sunshine + Moonlight
+name: RDP - windows 11
 
 on:
-  workflow_dispatch:
+
+# هذا يتيح لك تشغيل سير العمل يدويًا للحصول على RDP
+
+workflow\_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
-    timeout-minutes: 360
+secure-rdp:
+\# هذا السطر يضمن لك الحصول على أقوى جهاز (Runner) متاح في GitHub
+runs-on: windows-latest
+\# يضبط مدة الجلسة إلى الحد الأقصى (6 ساعات)
+timeout-minutes: 360
 
-    steps:
+```
+steps:
+  - name: Configure RDP Settings (Finalized) 🔧
+    run: |
+      Write-Host "Configuring RDP and Firewall..."
+      
+      # تمكين RDP التقليدي وتعطيل NLA
+      Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+      Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+      Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
 
-      # ============================================================
-      # 1. ENABLE RDP
-      # ============================================================
-      - name: Configure RDP
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
+      # فتح المنفذ 3389 بجميع ملفات تعريف الشبكة (profile=any)
+      netsh advfirewall firewall delete rule name="RDP-Tailscale"
+      netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 profile=any
+      Enable-NetFirewallRule -DisplayName "Remote Desktop (TCP-In)" -ErrorAction SilentlyContinue
+      
+      # إعادة التشغيل والانتظار لضمان تشغيل الخدمة
+      Write-Host "Restarting TermService and waiting for service to be Running."
+      Restart-Service -Name TermService -Force
+      
+      $maxWait = 30
+      $timeout = (Get-Date).AddSeconds($maxWait)
+      while ((Get-Service -Name TermService).Status -ne 'Running') {
+          if ((Get-Date) -gt $timeout) { Write-Error "TermService failed to start."; exit 1 }
+          Start-Sleep -Seconds 2
+      }
+      Write-Host "TermService is Running."
 
-          Write-Host "Configuring RDP..."
+  - name: Create RDP User with Secure Password
+    run: |
+      Add-Type -AssemblyName System.Security
+      $charSet = @{ Upper   = [char[]](65..90); Lower   = [char[]](97..122); Number  = [char[]](48..57); Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) }
+      $rawPassword = @()
+      $rawPassword += $charSet.Upper | Get-Random -Count 4
+      $rawPassword += $charSet.Lower | Get-Random -Count 4
+      $rawPassword += $charSet.Number | Get-Random -Count 4
+      $rawPassword += $charSet.Special | Get-Random -Count 4
+      $password = -join ($rawPassword | Sort-Object { Get-Random })
+      $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+      
+      New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+      Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+      Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+      
+      echo "RDP_USER=RDP" >> $env:GITHUB_ENV
+      echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+      
+      if (-not (Get-LocalUser -Name "RDP")) { Write-Error "User creation failed"; exit 1 }
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" `
-            -Value 0 `
-            -Force
+  - name: Install Tailscale 🔧
+    run: |
+      $tsVersion = "1.90.6" # تأكد من أن هذا الإصدار لا يزال صالحاً 
+      $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-$tsVersion-amd64.msi" 
+      $installerPath = "$env:TEMP\tailscale.msi"
+      
+      Write-Host "Downloading Tailscale Version $tsVersion from: $tsUrl using Start-BitsTransfer..."
+      Start-BitsTransfer -Source $tsUrl -Destination $installerPath
+      
+      if (-not (Test-Path $installerPath)) { Write-Error "Failed to download Tailscale installer."; exit 1 }
+      
+      Write-Host "Installation starting..."
+      Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+      Remove-Item $installerPath -Force
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" `
-            -Value 0 `
-            -Force
-
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "SecurityLayer" `
-            -Value 1 `
-            -Force
-
-          netsh advfirewall firewall delete rule `
-            name="RDP-Tailscale" 2>$null
-
-          netsh advfirewall firewall add rule `
-            name="RDP-Tailscale" `
-            dir=in `
-            action=allow `
-            protocol=TCP `
-            localport=3389 `
-            remoteip=100.64.0.0/10 `
-            profile=any
-
-          Enable-NetFirewallRule `
-            -DisplayName "Remote Desktop (TCP-In)" `
-            -ErrorAction SilentlyContinue
-
-          Restart-Service `
-            -Name TermService `
-            -Force
-
-          $timeout = (Get-Date).AddSeconds(30)
-
-          while ((Get-Service TermService).Status -ne "Running") {
-
-            if ((Get-Date) -gt $timeout) {
-              throw "TermService failed to start."
-            }
-
-            Start-Sleep -Seconds 2
-          }
-
-          Write-Host "RDP is running."
-
-
-      # ============================================================
-      # 2. CREATE RDP USER
-      # ============================================================
-      - name: Create RDP User
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $upper = [char[]](65..90)
-          $lower = [char[]](97..122)
-          $numbers = [char[]](48..57)
-
-          $special = (
-            [char[]](33..47) +
-            [char[]](58..64) +
-            [char[]](91..96) +
-            [char[]](123..126)
-          )
-
-          $passwordChars = @()
-
-          $passwordChars += $upper | Get-Random -Count 4
-          $passwordChars += $lower | Get-Random -Count 4
-          $passwordChars += $numbers | Get-Random -Count 4
-          $passwordChars += $special | Get-Random -Count 4
-
-          $password = -join (
-            $passwordChars | Sort-Object { Get-Random }
-          )
-
-          $securePassword = ConvertTo-SecureString `
-            $password `
-            -AsPlainText `
-            -Force
-
-          New-LocalUser `
-            -Name "RDP" `
-            -Password $securePassword `
-            -AccountNeverExpires
-
-          Add-LocalGroupMember `
-            -Group "Administrators" `
-            -Member "RDP"
-
-          Add-LocalGroupMember `
-            -Group "Remote Desktop Users" `
-            -Member "RDP"
-
-          "RDP_USER=RDP" >> $env:GITHUB_ENV
-          "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
-
-          Write-Host "RDP user created."
-
-
-      # ============================================================
-      # 3. INSTALL TAILSCALE
-      # ============================================================
-      - name: Install Tailscale
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $version = "1.90.6"
-
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-$version-amd64.msi"
-
-          $installer = "$env:TEMP\tailscale.msi"
-
-          Write-Host "Downloading Tailscale..."
-
-          curl.exe `
-            -L `
-            --fail `
-            --retry 10 `
-            --retry-all-errors `
-            --retry-delay 5 `
-            --connect-timeout 30 `
-            --max-time 300 `
-            -o "$installer" `
-            "$url"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Tailscale download failed."
-          }
-
-          Start-Process `
-            msiexec.exe `
-            -ArgumentList `
-              "/i",
-              "`"$installer`"",
-              "/quiet",
-              "/norestart" `
-            -Wait
-
-          Remove-Item `
-            $installer `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Write-Host "Tailscale installed."
-
-
-      # ============================================================
-      # 4. CONNECT TAILSCALE
-      # ============================================================
-      - name: Connect Tailscale
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
-
-          if (-not (Test-Path $tailscale)) {
-            throw "Tailscale executable not found."
-          }
-
-          & $tailscale up `
-            --authkey="${{ secrets.TAILSCALE_AUTH_KEY }}" `
-            --hostname="gh-sunshine-$env:GITHUB_RUN_ID"
-
+  - name: Establish Tailscale Connection 🌐
+    run: |
+      & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+      
+      $tsIP = $null
+      $retries = 0
+      while (-not $tsIP -and $retries -lt 10) {
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          if ($tsIP -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { break }
           $tsIP = $null
-
-          for ($i = 0; $i -lt 20; $i++) {
-
-            $ips = & $tailscale ip -4 2>$null
-
-            foreach ($ip in $ips) {
-
-              $ip = $ip.Trim()
-
-              if ($ip -match '^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$') {
-
-                $tsIP = $ip
-                break
-              }
-            }
-
-            if ($tsIP) {
-              break
-            }
-
-            Write-Host "Waiting for Tailscale IP..."
-
-            Start-Sleep -Seconds 3
-          }
-
-          if (-not $tsIP) {
-            throw "Tailscale IP was not assigned."
-          }
-
-          "TAILSCALE_IP=$tsIP" | Out-File `
-            $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          Write-Host ""
-          Write-Host "Tailscale IP:"
-          Write-Host $tsIP
-
-
-      # ============================================================
-      # 5. INSTALL VIRTUAL DISPLAY
-      # ============================================================
-      - name: Install Virtual Display
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "Downloading Virtual Display Driver..."
-          $url = "https://www.amyuni.com/downloads/usbmmidd_v2.zip"
-          $zip = "$env:TEMP\usbmmidd_v2.zip"
-          $dest = "C:\usbmmidd_v2"
-          
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $dest -Force
-          
-          Write-Host "Installing Virtual Display..."
-          Set-Location $dest
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c deviceinstaller64.exe install usbmmidd.inf usbmmidd" -Wait -NoNewWindow
-          Start-Process -FilePath "cmd.exe" -ArgumentList "/c deviceinstaller64.exe enableidd 1" -Wait -NoNewWindow
-          
-          Write-Host "Virtual Display initialized successfully."
-
-
-      # ============================================================
-      # 6. DOWNLOAD & EXTRACT PORTABLE SUNSHINE
-      # ============================================================
-      - name: Download Sunshine Portable
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "Downloading Sunshine Portable..."
-          
-          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine-windows-portable.zip"
-          $zipPath = "$env:TEMP\sunshine-portable.zip"
-          
-          curl.exe -L --fail --retry 5 -o $zipPath $url
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download sunshine-windows-portable.zip. The URL might be temporarily inaccessible."
-          }
-
-          $extractPath = "C:\Sunshine"
-          Write-Host "Extracting Sunshine to $extractPath..."
-          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-
-          Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-          
-          $exePath = (Get-ChildItem -Path $extractPath -Recurse -Filter "sunshine.exe" | Select-Object -First 1).FullName
-
-          if (-not $exePath) {
-            throw "Could not find sunshine.exe after extraction."
-          }
-
-          "SUNSHINE_EXE=$exePath" | Out-File `
-            $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          Write-Host "Sunshine portable extracted successfully at $exePath"
-
-
-      # ============================================================
-      # 7. CONFIGURE SUNSHINE CREDENTIALS
-      # ============================================================
-      - name: Configure Sunshine Credentials
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $username = "sunshine"
-          $chars = (
-            [char[]](65..90) +
-            [char[]](97..122) +
-            [char[]](48..57)
-          )
-
-          $password = -join (
-            1..20 | ForEach-Object {
-              $chars | Get-Random
-            }
-          )
-
-          Write-Host "Configuring Sunshine credentials..."
-
-          Stop-Process `
-            -Name "sunshine" `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Start-Sleep -Seconds 3
-
-          & $env:SUNSHINE_EXE `
-            --creds `
-            $username `
-            $password
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to configure Sunshine credentials."
-          }
-
-          "SUNSHINE_USER=$username" | Out-File `
-            $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          "SUNSHINE_PASSWORD=$password" | Out-File `
-            $env:GITHUB_ENV `
-            -Append `
-            -Encoding utf8
-
-          Write-Host "Sunshine credentials configured."
-
-
-      # ============================================================
-      # 8. SUNSHINE FIREWALL
-      # ============================================================
-      - name: Configure Sunshine Firewall
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          netsh advfirewall firewall delete rule name="Sunshine-Tailscale-Web" 2>$null
-          netsh advfirewall firewall delete rule name="Sunshine-Tailscale-TCP" 2>$null
-          netsh advfirewall firewall delete rule name="Sunshine-Tailscale-UDP" 2>$null
-
-          netsh advfirewall firewall add rule `
-            name="Sunshine-Tailscale-Web" `
-            dir=in `
-            action=allow `
-            protocol=TCP `
-            localport=47990 `
-            remoteip=100.64.0.0/10 `
-            profile=any
-
-          netsh advfirewall firewall add rule `
-            name="Sunshine-Tailscale-TCP" `
-            dir=in `
-            action=allow `
-            protocol=TCP `
-            localport="47984-47990,48010" `
-            remoteip=100.64.0.0/10 `
-            profile=any
-
-          netsh advfirewall firewall add rule `
-            name="Sunshine-Tailscale-UDP" `
-            dir=in `
-            action=allow `
-            protocol=UDP `
-            localport="47998-48000,48002,48010" `
-            remoteip=100.64.0.0/10 `
-            profile=any
-
-          Write-Host "Firewall configured."
-
-
-      # ============================================================
-      # 9. START SUNSHINE
-      # ============================================================
-      - name: Start Sunshine
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Write-Host "Starting Sunshine..."
-
-          Start-Process `
-            -FilePath $env:SUNSHINE_EXE `
-            -WorkingDirectory (
-              Split-Path $env:SUNSHINE_EXE
-            ) `
-            -WindowStyle Hidden
-
-          Start-Sleep -Seconds 10
-
-          $check = Test-NetConnection `
-            -ComputerName "127.0.0.1" `
-            -Port 47990 `
-            -WarningAction SilentlyContinue
-
-          if (-not $check.TcpTestSucceeded) {
-            throw "Sunshine Web UI is not responding."
-          }
-
-          Write-Host "Sunshine Web UI is ONLINE."
-
-
-      # ============================================================
-      # 10. CREATE PIN PAGE
-      # ============================================================
-      - name: Create PIN Page
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $folder = "C:\sunshine-pin"
-
-          New-Item `
-            -ItemType Directory `
-            -Path $folder `
-            -Force | Out-Null
-
-          $html = @'
-          <!DOCTYPE html>
-          <html>
-          <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Sunshine PIN</title>
-          <style>
-          * { box-sizing: border-box; }
-          body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center; background: #101010; color: white; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; }
-          .card { width: calc(100% - 32px); max-width: 420px; padding: 30px; border-radius: 22px; background: #1d1d1d; box-shadow: 0 20px 60px rgba(0,0,0,.5); text-align: center; }
-          h1 { margin: 0 0 10px; font-size: 28px; }
-          p { color: #aaa; margin-bottom: 25px; }
-          input { width: 100%; padding: 17px; border: 0; outline: none; border-radius: 14px; background: #2b2b2b; color: white; font-size: 30px; text-align: center; letter-spacing: 8px; }
-          button { width: 100%; margin-top: 18px; padding: 17px; border: 0; border-radius: 14px; background: white; color: black; font-size: 18px; font-weight: 700; cursor: pointer; }
-          #status { margin-top: 20px; min-height: 25px; color: #ccc; }
-          </style>
-          </head>
-          <body>
-          <div class="card">
-            <h1>Sunshine PIN</h1>
-            <p>Enter the 4-digit PIN shown by Moonlight.</p>
-            <form id="form">
-              <input id="pin" type="text" inputmode="numeric" maxlength="4" minlength="4" pattern="[0-9]{4}" placeholder="••••" autocomplete="off" required>
-              <button type="submit">CONNECT</button>
-            </form>
-            <div id="status"></div>
-          </div>
-          <script>
-          const form = document.getElementById("form");
-          const pin = document.getElementById("pin");
-          const status = document.getElementById("status");
-          form.addEventListener("submit", async function(event) {
-              event.preventDefault();
-              const value = pin.value.trim();
-              if (!/^[0-9]{4}$/.test(value)) {
-                  status.textContent = "Enter a 4-digit PIN.";
-                  return;
-              }
-              status.textContent = "Sending PIN to Sunshine...";
-              try {
-                  const response = await fetch("/pair", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ pin: value })
-                  });
-                  const data = await response.json();
-                  if (data.success) {
-                      status.textContent = "✓ PIN accepted by Sunshine.";
-                  } else {
-                      status.textContent = "✕ " + (data.error || "Sunshine rejected the PIN.");
-                  }
-              } catch (error) {
-                  status.textContent = "Connection error.";
-              }
-          });
-          </script>
-          </body>
-          </html>
-          '@
-
-          $html | Set-Content "$folder\index.html" -Encoding UTF8
-
-
-      # ============================================================
-      # 11. CREATE PIN SERVER
-      # ============================================================
-      - name: Create PIN Server
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $folder = "C:\sunshine-pin"
-
-          $server = @'
-          $ErrorActionPreference = "Stop"
-          $listener = New-Object System.Net.HttpListener
-          $listener.Prefixes.Add("http://+:8080/")
-          $listener.Start()
-          Write-Host "PIN server listening on port 8080."
-
-          function Send-Response {
-              param($Context, [int]$StatusCode, [string]$ContentType, [string]$Body)
-              $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
-              $Context.Response.StatusCode = $StatusCode
-              $Context.Response.ContentType = $ContentType
-              $Context.Response.ContentLength64 = $bytes.Length
-              $Context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
-              $Context.Response.OutputStream.Close()
-          }
-
-          while ($listener.IsListening) {
-              try {
-                  $context = $listener.GetContext()
-                  $request = $context.Request
-
-                  if ($request.HttpMethod -eq "GET" -and $request.Url.AbsolutePath -eq "/") {
-                      $html = Get-Content "C:\sunshine-pin\index.html" -Raw
-                      Send-Response $context 200 "text/html; charset=utf-8" $html
-                      continue
-                  }
-
-                  if ($request.HttpMethod -eq "POST" -and $request.Url.AbsolutePath -eq "/pair") {
-                      $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
-                      $body = $reader.ReadToEnd()
-                      $reader.Close()
-
-                      try {
-                          $data = $body | ConvertFrom-Json
-                          $pin = [string]$data.pin
-                      } catch {
-                          Send-Response $context 400 "application/json" '{"success":false,"error":"Invalid request."}'
-                          continue
-                      }
-
-                      if ($pin -notmatch '^\d{4}$') {
-                          Send-Response $context 400 "application/json" '{"success":false,"error":"PIN must be 4 digits."}'
-                          continue
-                      }
-
-                      $pairBody = @{ pin = $pin; name = "iPhone" } | ConvertTo-Json -Compress
-                      $credentials = $env:SUNSHINE_USER + ":" + $env:SUNSHINE_PASSWORD
-                      $credentialBytes = [System.Text.Encoding]::ASCII.GetBytes($credentials)
-                      $base64 = [Convert]::ToBase64String($credentialBytes)
-                      $headers = @{ Authorization = "Basic $base64" }
-
-                      try {
-                          $result = Invoke-RestMethod -Uri "https://127.0.0.1:47990/api/pin" -Method POST -Headers $headers -ContentType "application/json" -Body $pairBody -SkipCertificateCheck
-                          $json = @{ success = $true; message = "PIN accepted." } | ConvertTo-Json -Compress
-                          Send-Response $context 200 "application/json" $json
-                      } catch {
-                          $message = $_.Exception.Message
-                          $json = @{ success = $false; error = $message } | ConvertTo-Json -Compress
-                          Send-Response $context 400 "application/json" $json
-                      }
-                      continue
-                  }
-                  Send-Response $context 404 "text/plain" "Not Found"
-              } catch {
-                  Write-Host "PIN server error: $_.Exception.Message"
-              }
-          }
-          '@
-
-          $server | Set-Content "$folder\server.ps1" -Encoding UTF8
-
-
-      # ============================================================
-      # 12. PIN FIREWALL
-      # ============================================================
-      - name: Configure PIN Firewall
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          netsh advfirewall firewall delete rule name="Sunshine-PIN-Tailscale" 2>$null
-
-          netsh advfirewall firewall add rule `
-            name="Sunshine-PIN-Tailscale" `
-            dir=in `
-            action=allow `
-            protocol=TCP `
-            localport=8080 `
-            remoteip=100.64.0.0/10 `
-            profile=any
-
-
-      # ============================================================
-      # 13. START PIN SERVER
-      # ============================================================
-      - name: Start PIN Page
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          $script = "C:\sunshine-pin\server.ps1"
-
-          Write-Host "Starting PIN page..."
-          $content = Get-Content $script -Raw
-          [scriptblock]::Create($content) | Out-Null
-
-          $process = Start-Process `
-              -FilePath "powershell.exe" `
-              -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$script`"" `
-              -PassThru `
-              -WindowStyle Hidden
-
           Start-Sleep -Seconds 5
-
-          $ready = $false
-          for ($i = 0; $i -lt 20; $i++) {
-              $check = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
-              if ($check.TcpTestSucceeded) {
-                  $ready = $true
-                  break
-              }
-              Start-Sleep -Seconds 2
-          }
-
-          if (-not $ready) {
-              throw "PIN page failed to start."
-          }
-
-          Write-Host "PIN PAGE READY: http://$env:TAILSCALE_IP:8080"
-
-
-      # ============================================================
-      # 14. FINAL INFORMATION
-      # ============================================================
-      - name: Access Information
-        shell: powershell
-        run: |
-          Write-Host ""
-          Write-Host "======================================================"
-          Write-Host "                  ACCESS INFORMATION"
-          Write-Host "======================================================"
-          Write-Host ""
-          Write-Host "TAILSCALE IP:"
-          Write-Host $env:TAILSCALE_IP
-          Write-Host ""
-          Write-Host "RDP"
-          Write-Host "------------------------------------------------------"
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: $env:RDP_USER"
-          Write-Host "Password: $env:RDP_PASSWORD"
-          Write-Host ""
-          Write-Host "SUNSHINE"
-          Write-Host "------------------------------------------------------"
-          Write-Host "Web UI: https://$env:TAILSCALE_IP:47990"
-          Write-Host "Username: $env:SUNSHINE_USER"
-          Write-Host "Password: $env:SUNSHINE_PASSWORD"
-          Write-Host ""
-          Write-Host "MOONLIGHT"
-          Write-Host "------------------------------------------------------"
-          Write-Host "PC Address: $env:TAILSCALE_IP"
-          Write-Host ""
-          Write-Host "PIN PAGE"
-          Write-Host "------------------------------------------------------"
-          Write-Host "http://$env:TAILSCALE_IP:8080"
-          Write-Host ""
-          Write-Host "======================================================"
+          $retries++
+      }
+      
+      if (-not $tsIP) { Write-Error "Tailscale IP not assigned. Exiting."; exit 1 }
+      echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+  - name: Maintain Connection and Display Access Info ✨ (Final Step)
+    run: |
+      Write-Host "`n=== RDP ACCESS INFO ==="
+      Write-Host "Runner is ACTIVE. You have up to 6 hours of access."
+      Write-Host "Address: $env:TAILSCALE_IP"
+      Write-Host "Username: $env:RDP_USER"
+      Write-Host "Password: $env:RDP_PASSWORD"
+      Write-Host "==================`n"
+      
+      # يحافظ على تشغيل سير العمل حتى الوصول إلى الحد الأقصى للمدة الزمنية (6 ساعات)
+      while ($true) {
+          Write-Host "[$(Get-Date)] Runner Active - Use Ctrl+C in workflow to terminate"
+          Start-Sleep -Seconds 300
+      }
+```
