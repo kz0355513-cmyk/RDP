@@ -263,41 +263,36 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $progressPreference = 'SilentlyContinue'
 
-          Write-Host "Fetching latest Sunshine release..."
-          $apiUrl = "https://api.github.com/repos/LizardByte/Sunshine/releases/latest"
+          Write-Host "Downloading Sunshine Portable..."
           
-          $headers = @{
-            "User-Agent" = "GitHub-Actions-Sunshine"
-            "Accept" = "application/vnd.github+json"
-          }
-
-          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
-          
-          $portableAsset = $release.assets | Where-Object { $_.name -match "windows-portable\.zip$" }
-
-          if (-not $portableAsset) {
-            throw "Could not find the portable zip asset."
-          }
-
-          Write-Host "Downloading $($portableAsset.name)..."
+          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine-windows-portable.zip"
           $zipPath = "$env:TEMP\sunshine-portable.zip"
           
-          Invoke-WebRequest -Uri $portableAsset.browser_download_url -OutFile $zipPath
+          curl.exe -L --fail --retry 5 -o $zipPath $url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download sunshine-windows-portable.zip. The URL might be temporarily inaccessible."
+          }
 
           $extractPath = "C:\Sunshine"
           Write-Host "Extracting Sunshine to $extractPath..."
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
 
           Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+          
+          $exePath = (Get-ChildItem -Path $extractPath -Recurse -Filter "sunshine.exe" | Select-Object -First 1).FullName
 
-          "SUNSHINE_EXE=$extractPath\sunshine.exe" | Out-File `
+          if (-not $exePath) {
+            throw "Could not find sunshine.exe after extraction."
+          }
+
+          "SUNSHINE_EXE=$exePath" | Out-File `
             $env:GITHUB_ENV `
             -Append `
             -Encoding utf8
 
-          Write-Host "Sunshine portable extracted successfully."
+          Write-Host "Sunshine portable extracted successfully at $exePath"
 
 
       # ============================================================
